@@ -1,0 +1,59 @@
+***********************************************************************
+* PROGRAM: tecsys.5sec.phantom  TO AUTO-PROCESS XML'S TO/FROM TECSYS   *
+*                                                                     *
+* 12/10/20 * jemi                                                     *
+***********************************************************************
+    COMMON FILES(200)
+    CALL IQ.FILES
+
+***********************************************
+* Order Status Updates
+***********************************************
+
+1   CALL TECSYS.ORD.STAT.CHG.PHANTOM
+*    GOTO 2
+   GOTO 3
+
+***********************************************
+* Picked Order Updates
+***********************************************
+
+2   
+    CALL TECSYS.OUTBOUND.ORD.PICKED.PHANTOM
+    GOTO 4
+    
+
+***********************************************
+* Inbound Order Updadate
+***********************************************
+
+3   CALL TECSYS.INBOUND.ORD.UPDATE.PHANTOM
+*    GOTO 4
+    GOTO 7
+    
+***********************************************
+* Inventory Status Change Update
+***********************************************
+
+4   CALL TECSYS.INV.STAT.CHG.PHANTOM
+    GOTO 5
+    
+***********************************************
+* Outbound Shipped Order Results Update
+***********************************************
+
+5   CALL TECSYS.OUTBOUND.ORD.SHIPPED.PHANTOM
+    GOTO 6
+    
+***********************************************
+* Outbound Shipped Signature Results Update
+***********************************************
+
+6   CALL TECSYS.ORD.MDM.SIG.PHANTOM
+    GOTO 7
+
+
+7   SLEEP 15     ;  *  <-- Runs every 10 SEC
+
+900 GOTO 1
+END

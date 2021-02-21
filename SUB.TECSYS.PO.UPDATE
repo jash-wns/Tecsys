@@ -1,0 +1,435 @@
+SUBROUTINE SUB.TECSYS.PO.UPDATE(FILE.DATA,DATA.TYPE,START.MARKER,END.MARKER)
+*********************************************************************
+*
+* PARSE INCOMING DATA FROM TECSYS                                   *
+*
+* ADDED HANDLING TO THE SPECIAL PARTS LIST 01/18/21                 *
+*                                                                   
+*********************************************************************
+CALL IQ.FILES
+COMMON FILES(200)
+
+
+
+* PICK FILE OPENS
+OPEN "ORDER" TO F.ORDER ELSE DEBUG
+OPEN "SHIPPING" TO F.SHIPPING ELSE DEBUG
+OPEN "RECEIVED-POS" TO F.RECEIVED.POS ELSE DEBUG
+OPEN "PO" TO F.PO ELSE DEBUG
+OPEN "BRANCH" TO F.BRANCH ELSE DEBUG
+OPEN "INVENTORY" TO F.INVENTORY ELSE DEBUG
+OPEN "PRODUCT-MASTER" TO F.PRODUCT.MASTER ELSE DEBUG
+OPEN "TRANSFERS" TO F.TRANSFERS ELSE DEBUG
+OPEN "STOCK-TRANSFER" TO F.STOCK.TRANSFER ELSE DEBUG
+OPEN "VENDOR" TO F.VENDOR ELSE DEBUG
+
+* GLOBAL VARIABLES
+REC.DATE = DATE()
+REC.TIME = TIME()
+
+EMAIL.LIST = ''
+EMAIL.LIST<1> = "WMS-INTErrors@goblueteam.com"
+EMAIL.LIST<2> = "JShelhamer@GoBlueTeam.com"
+
+*----------------------------------------------------------------------------------------------------
+*============================
+* auto complete qty-shipped *
+*============================
+SPECIAL.PART.LIST = "BUSINESSPR"
+SPECIAL.PART.LIST<-1> = "DONATIONPR"
+SPECIAL.PART.LIST<-1> = "BILLING ADJ"
+SPECIAL.PART.LIST<-1> = "BUSINESSMI"
+SPECIAL.PART.LIST<-1> = "PHANDLING"
+SPECIAL.PART.LIST<-1> = "IHANDLING"
+SPECIAL.PART.LIST<-1> = "DHANDLING"
+SPECIAL.PART.LIST<-1> = "WHANDLING"
+SPECIAL.PART.LIST<-1> = "HHANDLING"
+SPECIAL.PART.LIST<-1> = "RHANDLING"
+SPECIAL.PART.LIST<-1> = "GHANDLING"
+SPECIAL.PART.LIST<-1> = "ZHANDLING"
+SPECIAL.PART.LIST<-1> = "SHANDLING"
+SPECIAL.PART.LIST<-1> = "PSHOWHANDLING"
+SPECIAL.PART.LIST<-1> = "RECHANDLING"
+*SPECIAL.PART.LIST<-1> = "TLZ2400080"
+*SPECIAL.PART.LIST<-1> = "TLZ2400060"
+*----------------------------------------------------------------------------------------------------
+
+* XML LINE TAG VARIABLES *
+LINEOUT.LOOP="WmsReceivingResultLineOutSiEs.Line"
+LINEOUT.TAG="WmsReceivingResultLineOutSiEs.Line."
+LINEDETAIL.TAG="WmsReceivingResultLineDetailOutSiEs.Line."
+LINESERIAL.TAG="WmsReceivingResultLineDetailOutSiEs.Line."
+
+
+************************************
+* START OF PROCESSING OF THE ORDER *
+************************************
+
+* ORDER DATA ARRAY VARIABLES *
+LOCK.DATA=''     ;   * USED TO READ IN THE ORIGINAL ORDER DATA FROM THE PICK FILE
+DATA.UPDATE='' ; * THIS IS UPDATED WITH THE WMS INFORMATION AS IT IS PROCESSED BEFORE IT IS WRITTEN TO THE ORDER
+ORD.NUM=''
+
+
+**************************************
+* INITIALIZE AND LOAD DATA FROM PICK *
+**************************************
+LOCATE "InboundOrder" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
+    IF POS > START.MARKER AND POS < END.MARKER THEN
+        ORD.NUM=FILE.DATA<3,POS>
+    END ELSE
+        ORD.NUM="ORDER NUMBER NOT FOUND IN RANGE"
+    END
+END ELSE
+    * IF WE CANT' FIND AN ORDER NUMBER THEN WE CAN'T LOAD ORDER DATA!! WHAT SHOULD WE DO HERE, SAVE THE DATA SOMEWHERE?
+    ORD.NUM="ORDER NUMBER NOT FOUND"
+END
+
+IF DATA.TYPE = "IPUR" THEN
+   READU LOCK.DATA FROM F.PO,ORD.NUM THEN     ;  * LOCK AND READ IN ORIGINAL ORDER ITEM DATA
+      DATA.UPDATE=LOCK.DATA    ;   * THIS IS TO PRE-POPULATE OUR UPDATE ARRAY WITH ORDER DATA THIS MAY NOT BE NEEDED IF WE DONT' WANT TO DO IT
+   END ELSE
+      RELEASE
+      RETURN
+   END
+END
+
+
+*******************************************************
+* THIS IS WHERE WE LOOK UP AND ASSIGN THE HEADER DATA *
+* DON'T FORGET THERE IS NO TAG FOR THIS SECTION       *
+*******************************************************
+* THESE VARIABLES ARE THE PIECES OF INFORMATION WE ARE GOING TO LOCATE IN THE HEADER OF THE UPDATE *
+TASK=''
+ORD.STAT=''
+BRANCH=''
+FRT.CHG=''
+LOCATION=''
+USER.ID=''
+
+    LOCATE "Warehouse" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
+        IF POS > START.MARKER AND POS < END.MARKER THEN
+            BRANCH=FILE.DATA<3,POS>
+        END ELSE
+            BRANCH=1
+        END
+    END ELSE
+        BRANCH=1
+    END
+
+    LOCATE "Receipt" IN FILE.DATA<1>,START.MARKER SETTING POS THEN    ;  * THIS IS THE ONLY FIELD TO KNOW THE ORDER WAS SHIPPED
+        IF POS > START.MARKER AND POS < END.MARKER THEN
+            TASK=FILE.DATA<3,POS>
+        END
+    END ELSE
+        TASK="TASK NOT FOUND"
+    END
+        
+    LOCATE "Status" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
+        IF POS > START.MARKER AND POS < END.MARKER THEN
+            ORD.STAT=FILE.DATA<3,POS>
+        END
+    END ELSE
+        ORD.STAT="STATUS NOT FOUND"
+    END
+
+    LOCATE "CreatedBy" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
+        IF POS > START.MARKER AND POS < END.MARKER THEN
+            USER.ID=FILE.DATA<3,POS>
+        END ELSE
+            USER.ID="WMS"
+        END
+    END
+
+    LOCATE "CustomNumeric1" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
+        IF POS > START.MARKER AND POS < END.MARKER THEN
+            FRT.CHG=FILE.DATA<3,POS>
+        END ELSE
+         FRT.CHG = "0"
+        END
+    END ELSE
+        FRT.CHG = "0"
+    END
+****************************************************************************    
+* THIS IS WHERE WE CAN DO ADDITIONAL TRANSFORMATION AND VERIFICATION       *
+* OF HEADER DATA IF WE CAN'T OR DON'T WANT TO DO IT DURING THE LOOKUP      *
+* WE SHOULD TRY AND KEEP ALL TRANSFORMATION HERE SO LOOKUP LOGIC IS UNIQUE *
+****************************************************************************
+* DO WE NEED TO LOOK UP THE ORD.STAT IF WE ARE GOING TO OVER RIDE IT DEPENDING ON THE TASK DATA
+IF TASK # "" THEN ORD.STAT = "RECVD"
+
+* BRANCH NUMBER VERIFICATION
+IF BRANCH = "BRANCH1" OR BRANCH = "WHSE1" THEN BRANCH = "1"
+
+*****************************************************************
+* WE HAVE THE HEADER DATA TRANSFORMED THE WAY WE WANT IT        *
+* NOW WE DECIDE WHAT IS IMPORTANT/NEEDED FOR UPDATE AND LOAD IT *
+* INTO THE DATA.UPDATE ARRAY PER THE LINE NUMBER                *
+*****************************************************************
+
+* REMOVE TRAILING 0'S FROM FRT AMOUNT
+FRT.CHG = ICONV(FRT.CHG,"MD2")
+ 
+DATA.UPDATE<11> = DATE()      ;  * Received Date
+DATA.UPDATE<22> = USER.ID     ;  * Received ID
+DATA.UPDATE<52> = FRT.CHG     ;  * Estimated Freight
+DATA.UPDATE<84> = ORD.STAT 
+    
+******************************************************
+* LOCATING OF ALL HEADER DATA IS COMPLETE            *
+* WE DO ADDITIONAL TRANSFORMATION AND VERIFIDCATION  *
+* OF DATA LATER ON AFTER WE LOCATE THE LINE DATA     *
+******************************************************
+* THIS IS WHERE WE LOOK UP AND ASSIGN EACH LINE DATA *
+* DON'T FORGET THE TAG FOR THE DATA IN THIS SECTION  *
+******************************************************
+ LINE.START=START.MARKER
+ LINE.NEXT=''
+ LINES.COMPLETE=0
+ LINE.NUM=1
+
+NEXT.LINE:
+
+* LINE LEVEL VARIABLES
+SER.NUM=''
+PART=''
+LOT=''
+LOC=''
+Q.RECV=''
+BC=''
+USER.NAME=''
+TAG=''
+*LOCATION=''
+EXP.DATE=''
+
+* SET LINE DELIMETERS *
+    LOCATE LINEOUT.LOOP IN FILE.DATA<1>,LINE.START SETTING LINE.START THEN
+        LOCATE LINEOUT.LOOP IN FILE.DATA<1>,LINE.START+1 SETTING LINE.NEXT THEN
+            IF LINE.NEXT < END.MARKER AND LINE.NEXT > LINE.START THEN
+                PRINT "MORE LINES TO COME"
+            END ELSE
+                LINES.COMPLETE=1
+            END
+        END ELSE
+            LINES.COMPLETE=1
+        END
+    END ELSE
+        * WHAT DO WE DO IF CAN'T FIND ANY LINES IN THE ORDER?
+    END
+
+    LOCATE LINEOUT.TAG:"HostOrderLine" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            LINE.NUM=FILE.DATA<3,POS>
+        END
+    END
+
+IF LINE.NUM = "" THEN
+    LOCATE LINEOUT.TAG:"InboundOrderLine" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            LINE.NUM=FILE.DATA<3,POS>
+        END
+    END
+END
+
+    LOCATE LINEOUT.TAG:"Item" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            PART=FILE.DATA<3,POS> 
+        END
+    END ELSE
+        * WHAT DO WE DO IF WE CANT' FIND THE PART NUMBER? ARE WE PASSING THIS TO ORDER UPDATE?
+        PRINT "CAN'T FIND PART NUMBER"
+        PART='ITEM NOT FOUND'
+        DEBUG
+    END
+
+
+    LOCATE LINEOUT.TAG:"Lot" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            LOT=FILE.DATA<3,POS>
+        END
+    END ELSE
+        LOT=""
+    END   
+    
+    LOCATE LINEOUT.TAG:"QuantityProcessed" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            Q.RECV=FILE.DATA<3,POS>
+        END      
+    END ELSE
+        Q.RECV=0
+    END
+
+*~* TURN Q.RECV INTO AN INTEGER
+*THIS CAN BE MOVED BACK DOWN TO THE TRANSFORMATION SECTION
+Q.RECV = INT(Q.RECV)
+
+*******************************************************
+* THIS IS WHERE WE LOOK UP AND ASSIGN THE LINE DETAIL *
+* MAKE SURE TO INCLUDE BOTH TAGS FOR THIS DATA        *
+*******************************************************
+    LOCATE LINEOUT.TAG:LINEDETAIL.TAG:"UserName" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            USER.NAME=FILE.DATA<3,POS>
+        END ELSE
+            USER.NAME="WMS"
+        END
+    END
+
+    LOCATE LINEOUT.TAG:LINEDETAIL.TAG:"Tag" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            TAG=FILE.DATA<3,POS>
+        END ELSE
+            TAG=""
+        END
+    END ELSE
+        TAG=""
+    END 
+
+  
+    LOCATE LINEOUT.TAG:LINEDETAIL.TAG:"ItemExpirationDate" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+        IF POS > LINE.START AND POS < LINE.NEXT THEN
+            EXP.DATE=FILE.DATA<3,POS>
+        END ELSE
+            EXP.DATE=""
+        END
+    END ELSE
+        EXP.DATE=""
+    END
+    
+
+*~* EXPIRATION DATE BREAK-OUT REQUIRED*~* i.e. 2293-12-02''
+*    IF EXP.DATE # "" THEN
+*       MONTH = EXP.DATE[6,2]:"/"
+*       DAY = EXP.DATE[9,2]:"/"
+*       YEAR = EXP.DATE[3,2]
+*    EXP.DATE = MONTH:DATE:YEAR
+*    END
+           
+*************************************************************
+* THIS IS WHERE WE LOOKUP AND ASSIGN THE LINE SERIAL DETAIL *
+* MAKE SURE TO INCLUDE BOTH TAGS FOR THIS DATA              *
+*************************************************************
+*    LOCATE LINEOUT.TAG:LINESERIAL.TAG:"SerialNumber" IN FILE.DATA<1>,LINE.START SETTING POS THEN
+*        IF POS > LINE.START AND POS < LINE.NEXT THEN
+*            SER.NUM=FILE.DATA<3,POS>
+*        END ELSE
+*            SER.NUM=""
+*        END
+*    END ELSE
+*        SER.NUM=""
+*    END
+****************************************************************************
+* LOCATING ALL LINE DATA IS COMPLETE                                       *
+* THIS IS WHERE WE CAN DO ADDITIONAL TRANSFORMATION AND VERIFIDCATION      *
+* OF DATA IF WE CAN'T OR DON'T WANT TO DO IT DURING THE LOOKUP STEP        *
+* WE SHOULD TRY AND KEEP ALL TRANSFORMATION HERE SO LOOKUP LOGIC IS UNIQUE *
+****************************************************************************
+
+* USER ID VERIFICATION
+IF USER.ID = "wms_erp_si_es" OR USER.ID = "system" THEN
+    USER.ID = "WSYS"
+END
+
+*VERIFY THE WMS PART MATCHES ORDERED PART PER LINE
+IF PART # LOCK.DATA<2,LINE.NUM> THEN
+    PRINT "ORIGINAL PART: ":LOCK.DATA<2,LINE.NUM>:" DOESN'T MATCH WMS PART: ":PART
+END
+
+* CHECK IF A SPECIAL PART
+LOCATE PART IN SPECIAL.PART.LIST SETTING POS THEN
+* IF SO THEN LOAD THE NEGATIVE QTY IN THE ORDER FILE AND MARK COMPLETE
+    Q.RECV = LOCK.DATA<5,LINE.NUM>
+    BC = 'C'
+END ELSE
+* IF IT IS ALLOWED THEN VERIFY THE QTY SHIPPED SENT BY WMS UPDATE AGAINST ORDER FILE QTY ORDERED AND MARK IT
+*       IF Q.RECV >=  LOCK.DATA<5,LINE.NUM> OR VEND.REC<75> = "N" THEN
+   IF Q.RECV >=  LOCK.DATA<5,LINE.NUM> THEN
+            BC = 'C'
+        END ELSE
+            BC = 'B'
+        END
+    END
+
+***********************************************************************
+* WE HAVE A SINGLE LINES WORTH OF DATA TRANSFORMED THE WAY WE WANT IT *
+* NOW WE DECIDE WHAT IS IMPORTANT/NEEDED FOR UPDATE AND LOAD IT       *
+* INTO THE DATA.UPDATE ARRAY PER THE LINE NUMBER                      *
+***********************************************************************
+
+DATA.UPDATE<19,LINE.NUM>=Q.RECV
+DATA.UPDATE<20,LINE.NUM> = BC
+
+DATA.UPDATE<85,LINE.NUM>=PART
+DATA.UPDATE<86,LINE.NUM>=Q.RECV
+DATA.UPDATE<87,LINE.NUM>=USER.NAME
+DATA.UPDATE<75,LINE.NUM>=LOT
+DATA.UPDATE<89,LINE.NUM>=TAG
+DATA.UPDATE<91,LINE.NUM>=EXP.DATE
+***************************************************
+* CHECK TO SEE IF ALL LINES HAVE BEEN PROCESSED   *
+***************************************************
+IF LINES.COMPLETE # '1' THEN
+    LINE.START=LINE.START+1
+    GOTO NEXT.LINE
+END
+
+****************************************************************************
+* LINE DATA PROCESSING IS COMPLETE                                         *
+****************************************************************************
+
+*************************************************************
+* ALL ORDER DATA HAS BEEN PROCESSED AND IS READY FOR UPDATE *
+*************************************************************
+* THIS IS WHERE WE UPDATE THE TIMESTAMP DATA ARRAY          *
+*************************************************************
+TS.MSG=''           ;   * THIS IS UPDATED AND PASSED TO THE SUBROUTINE
+TS.KEY=ORD.NUM
+
+
+* HARD CODED TIMESTAMP ATTRIBUTES *
+TS.MSG<1>="TECSYS RECEIVED"
+
+
+IF DATA.TYPE = "IPUR" THEN
+   TS.KEY = ORD.NUM:'*PO'
+END
+
+   
+IF ORD.STAT="HOLD" THEN ; *HOLD - On Hold -  Means that it's been returned to the Staging Table
+   TS.MSG<2>="ORDER ON HOLD"
+END
+
+IF ORD.STAT="RECVD" THEN ; *RECVD - Received
+   TS.MSG<2>="TAG: ":TAG
+END
+
+IF ORD.STAT="SUSP" THEN ; *SUSP - Suspended  -  WHY??
+   TS.MSG<2>="ORDER SUSPENDED"
+END
+
+
+**************************************************************************
+* THIS IS WHERE WE CALL ALL UPDATE PROGRAMS FOR ANY WORK TO BE COMPLETED *
+* WRITE THE DATA TO THE ORDER AND TO THE TIMESTAMP, ETC ETC              *
+**************************************************************************
+
+* SAFETY NET OF CONSISTENCY TO LOAD OUR UPDATED INFORMATION INTO THE ORIGINAL ORDER BEFORE WE WRITE IT
+LOCK.DATA=DATA.UPDATE
+
+* WHATEVER WE SHOULD DO FOR A STOCK TRANSFER UPDATE
+WRITE LOCK.DATA ON F.PO,ORD.NUM                  ;       * UPDATES THE ORDER FILE
+
+SRC = "1"
+   CALL WMS.IQ.SR.RECEIPTS ( SRC, ORD.NUM ) 
+
+CALL WMS.TIMESTAMP.UPDATE(TS.MSG, TS.KEY, "WMS", USER.ID, error)
+
+   IF FRT.CHG # "" OR FRT.CHG # "0" THEN
+      FRT.CHG = OCONV(FRT.CHG,"MD2")
+      TS.MSG<1>="Update from RF"
+      TS.MSG<2>="EstFrt Add at RF:":FRT.CHG
+      CALL WMS.TIMESTAMP.UPDATE(TS.MSG, TS.KEY, "WMS", USER.ID, error)      
+   END
+
+RELEASE
+RETURN
