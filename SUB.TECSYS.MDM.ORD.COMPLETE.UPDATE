@@ -1,0 +1,266 @@
+SUBROUTINE SUB.TECSYS.MDM.ORD.COMPLETE.UPDATE(FILE.DATA,DATA.TYPE,START.MARKER,END.MARKER)
+***********************************************************************************************
+* PARSE AND UPDATE DATA FOR MDM UPDATE.TYPE="1" DELIVERED OR UPDATE.TYPE="11" CUSTOMER PICKUP 
+* THIS DOES THE TRANSFORMATION OF DATA AND UPDATES FILES OR CALLS OTHER
+* SUBROUTINES TO COMPLETE THE WORK
+***********************************************************************************************
+CALL IQ.FILES
+COMMON FILES(200)
+
+AM = CHAR(254)
+VM = CHAR(253)
+SVM = CHAR(252)
+
+* PICK FILE OPENS
+OPEN "DELIVERY-INFO" TO F.DELIVERY.INFO ELSE ERROR<-1> = "DELIVERY-INFO did not open"
+OPEN "ORDER" TO F.ORDER ELSE ERROR<-1> = "ORDER not located"
+OPEN "SHIPPING" TO F.SHIPPING ELSE ERROR<-1> = "SHIPPING not located"
+OPEN "STOCK-TRANSFER" TO F.STOCK.TRANSFER ELSE ERROR<-1> = "STOCK-TRANSFER not located"
+OPEN "TRANSFERS" TO F.TRANSFERS ELSE ERROR<-1> = "TRANSFERS not located"
+
+************************************
+* START OF PROCESSING OF THE ORDER *
+************************************
+
+* ORDER DATA ARRAY VARIABLES *
+LOCK.DATA=''     ;   * USED TO READ IN THE ORIGINAL ORDER DATA FROM THE PICK FILE
+DATA.UPDATE='' ; * THIS IS UPDATED WITH THE WMS INFORMATION AS IT IS PROCESSED BEFORE IT IS WRITTEN TO THE ORDER
+ORD.NUM=''
+UPDATE.FILE=''  ; * USED TO IDENTIFY WHERE ORDER DATA CAME FROM
+ORD.STAT =''  ;     *USED FOR UPDATING THE ORDER ATTRIBUTE
+
+
+**************************************
+* INITIALIZE AND LOAD DATA FROM PICK *
+**************************************
+LOCATE "Package-OrderNumber" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
+    IF POS > START.MARKER AND POS < END.MARKER THEN
+        ORD.NUM=FILE.DATA<3,POS>
+    END ELSE
+        FIND.TAG = "Package-OrderNumber"
+        TAG.DATA = ''
+        CALL SUB.TECSYS.LOC.TAG.DATA(FILE.DATA,FIND.TAG,TAG.DATA,START.MARKER,END.MARKER,KEY)
+
+        IF TAG.DATA # '' AND TAG.DATA # '0' THEN
+            TAG.DATA = TAG.DATA
+        END ELSE
+            TAG.DATA = "NO TIED ORDER"
+        END
+
+        EMAIL.LIST = ''
+        CUSTOM.FROM = ''
+        CUSTOM.SUBJECT='ORDER NUMBER NOT FOUND WITHIN BOUNDS ON ORDER# ': TAG.DATA
+        CUSTOM.BODY = ''
+        
+        CALL SUB.TECSYS.EMAIL.DATA(FILE.DATA,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.MARKER,END.MARKER)
+        RELEASE
+        RETURN 
+    END
+END ELSE
+    * IF WE CANT' FIND AN ORDER NUMBER THEN WE CAN'T LOAD ORDER DATA!! WHAT SHOULD WE DO HERE, SAVE THE DATA SOMEWHERE?
+
+        EMAIL.LIST = ''
+        CUSTOM.FROM = ''
+        CUSTOM.SUBJECT='NO <Package-OrderNumber> TAG FOUND IN UPDATE '
+        CUSTOM.BODY = ''
+        
+        CALL SUB.TECSYS.EMAIL.DATA(FILE.DATA,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.MARKER,END.MARKER)
+END
+
+READU LOCK.DATA FROM F.ORDER,ORD.NUM THEN     ;  * LOCK AND READ IN ORIGINAL ORDER ITEM DATA
+    DATA.UPDATE=LOCK.DATA    ;   * THIS IS TO PRE-POPULATE OUR UPDATE ARRAY WITH ORDER DATA THIS MAY NOT BE NEEDED IF WE DONT' WANT TO DO IT
+    UPDATE.FILE="ORDER"
+END ELSE
+    READU LOCK.DATA FROM F.SHIPPING,ORD.NUM THEN    ; * LOCK AND READ FROM SHIPPING FILE IF NOT FOUND IN ORDER FILE
+    DATA.UPDATE=LOCK.DATA
+    UPDATE.FILE="SHIPPING"
+    END ELSE
+        READU LOCK.DATA FROM F.TRANSFERS,ORD.NUM THEN    ; * LOCK AND READ FROM TRANSFERS FILE IF NOT FOUND IN ORDER OR SHIPPING FILE
+        DATA.UPDATE=LOCK.DATA
+        UPDATE.FILE="TRANSFERS"
+        END ELSE
+            READU LOCK.DATA FROM F.STOCK.TRANSFER,ORD.NUM THEN    ; * LOCK AND READ FROM STOCK-TRANSFER FILE IF NOT FOUND IN ORDER OR SHIPPING OR TRANSFERS FILE
+            DATA.UPDATE=LOCK.DATA
+            UPDATE.FILE="STOCK-TRANSFER"
+            END ELSE
+                UPDATE.FILE=""
+
+                EMAIL.LIST = ''
+                CUSTOM.FROM = ''
+                CUSTOM.SUBJECT='UNABLE TO READ ORDER/SHIPPING RECORD FILE FOR ORDER# ': ORD.NUM
+                CUSTOM.BODY = ''
+                
+                CALL SUB.TECSYS.EMAIL.DATA(FILE.DATA,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.MARKER,END.MARKER)
+
+                RELEASE 
+                RETURN
+            END
+        END
+    END
+END
+
+
+*************************************************
+* THIS IS WHERE WE LOOK UP AND ASSIGN THE DATA  *
+* DON'T FORGET THERE IS NO TAG FOR THIS SECTION *
+*************************************************
+* THESE VARIABLES ARE THE PIECES OF INFORMATION WE ARE GOING TO LOCATE IN THE UPDATE *
+USER.ID=''
+DATE.TIME=''
+S.NAME=''
+D.NOTES=''
+SIGNATURE=''
+
+   LOCATE "Manifest-Driver" IN FILE.DATA<1> SETTING POS THEN
+      USER.ID=FILE.DATA<3,POS>
+      END ELSE
+      USER.ID="DMS"
+   END
+      
+   LOCATE "EventTime" IN FILE.DATA<1> SETTING POS THEN         ;  *  <7,4>
+      DATE.TIME=FILE.DATA<3,POS>
+      END ELSE
+      DATE.TIME = OCONV(DATE(),"d2/"):" ":OCONV(TIME(),"mts") ;* 24h time
+   END
+
+      CONVERT '-' TO '/' IN DATE.TIME
+
+   LOCATE "SignatureName" IN FILE.DATA<1> SETTING POS THEN     ;  *  <5>
+      S.NAME=FILE.DATA<3,POS>
+      END ELSE
+      S.NAME="NOT OBTAINED"
+   END
+
+
+   LOCATE "WnsEventMessagesTs" IN FILE.DATA<1> SETTING POS THEN ;  *  <7,10>
+      D.NOTES=FILE.DATA<3,POS>
+      END ELSE
+      D.NOTES = ""
+   END
+   
+*   LOCATE "Package-DeliveryStatus" IN FILE.DATA<1> SETTING POS THEN     ;  * THIS HAS A NUMBER IN IT.  WHAT DOES THE NUMBER MEAN?
+*      D.STATUS=FILE.DATA<3,POS>                                         ;  * HAVE IT GOING TO <6> AT THE MOMENT SINCE IT'S EMPTY
+*      END ELSE
+*          ORD.UPDATE<6>=""
+*      END
+*   END
+        
+   LOCATE "SignatureImageTs" IN FILE.DATA<1> SETTING POS THEN     ;  *  <1>
+      SIGNATURE=FILE.DATA<3,POS>
+      SIG.VERS='3'
+   END ELSE
+*      SIGNATURE = ""
+      
+*      IF SIGNATURE = "" THEN
+         SIGNATURE = "Qk2yAwAAAAAAAJIAAAB8AAAAoAAAACgAAAABAAEAAAAAACADAAAAAAAAAAAAAAIAAAACAAAAAAD/AAD/AAD/AAAAAAAA/0JHUnOPwvUoUbgeFR6F6wEzMzMTZmZmJmZmZgaZmZkJPQrXAyhcjzIAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAP///wD/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////4B/////////////////////////AD////////////////////////4eH/////////////////////////8f///////////////j8fgf/wfH4xx8/BHH4Pj/B////+Ph8A/+AceAHHz4AcfAOPwB////4+Hhh/wBxwAcfPDBx4Y4+HH////jwePH/HjHHhx84/HHjxj4/////+OBx+P/+MY/HHzj8ccfGPn/////44HH4//xxj8cfOPxxx8Y8AD////jEcfj/+HGPxx84/HHHxjwAP///+MRx+P/w8Y/HHzj8ccfGPj4////4jHjx/+Hxx4ceOHhxx8Y+Pj////gceAH/w/HABwA8AGDHxh4Yf///+Bx8A/+P8eAHAH4AQMfGDwD////4PH8P/4/x+Mc4/wxg58Znw/////g8f///jP////////H/////////+Hx///+Acf//////8f/////////4/H///8Dx///////x//////////j8f///4fH///////H//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////w=="
+         SIG.VERS='1'
+*      END
+   END
+
+
+**************************************
+* LOCATING OF ALL DATA IS COMPLETE   *
+* DATA TRANSFORMATION CAN NOW HAPPEN *
+**************************************
+
+IF USER.ID = "" THEN USER.ID = "WSYS"
+
+IF DATA.TYPE='1' OR DATA.TYPE='11' THEN
+    ORD.STAT = "DELIVERED"
+END ELSE
+    PRINT 'ORDER TYPE ': DATA.TYPE :' DOES NOT MATCH THIS SUBROUTINE'
+    DEBUG
+    RELEASE
+    RETURN
+END
+
+
+*****************************************************************
+* WE HAVE THE DATA TRANSFORMED THE WAY WE WANT IT               *
+* NOW WE DECIDE WHAT IS IMPORTANT/NEEDED FOR UPDATE AND LOAD IT *
+* INTO THE DATA.UPDATE ARRAY                                    *
+*****************************************************************
+
+
+
+IF UPDATE.FILE # '' OR UPDATE.FILE # '0' THEN
+    IF UPDATE.FILE="ORDER" OR UPDATE.FILE="SHIPPING" THEN
+        DATA.UPDATE<162> = ORD.STAT 
+    END
+
+    IF UPDATE.FILE="TRANSFERS" OR UPDATE.FILE="STOCK-TRANSFER" THEN
+        DATA.UPDATE<67> = ORD.STAT 
+    END
+END ELSE
+    DEBUG
+    RELEASE
+    RETURN
+END
+
+*************************************************************
+* ALL ORDER DATA HAS BEEN PROCESSED AND IS READY FOR UPDATE *
+*************************************************************
+* THIS IS WHERE WE UPDATE THE TIMESTAMP DATA ARRAY          *
+*************************************************************
+TS.MSG=''           ;   * THIS IS UPDATED AND PASSED TO THE SUBROUTINE
+TS.KEY=''
+
+IF UPDATE.FILE # '' OR UPDATE.FILE # '0' THEN
+    IF UPDATE.FILE="ORDER" OR UPDATE.FILE="SHIPPING" THEN
+        TS.KEY=ORD.NUM
+        TS.MSG<1>="TECSYS UPDATE"
+        TS.MSG<2>="ORDER DELIVER COMPLETE"
+        TS.MSG<5>="SO"
+    END
+
+    IF UPDATE.FILE="TRANSFERS" OR UPDATE.FILE="STOCK-TRANSFER" THEN
+        TS.KEY=ORD.NUM:"*ST"
+        TS.MSG<1>="TECSYS UPDATE"
+        TS.MSG<2>="ORDER DELIVER COMPLETE"
+        TS.MSG<5>="ST"
+    END
+END ELSE
+    DEBUG
+    RELEASE
+    RETURN
+END
+
+
+**************************************************************************
+* THIS IS WHERE WE CALL ALL UPDATE PROGRAMS FOR ANY WORK TO BE COMPLETED *
+* WRITE THE DATA TO THE ORDER AND TO THE TIMESTAMP, ETC ETC              *
+**************************************************************************
+
+* SAFETY NET OF CONSISTENCY TO LOAD OUR UPDATED INFORMATION INTO THE ORIGINAL ORDER BEFORE WE WRITE IT
+LOCK.DATA=DATA.UPDATE
+
+BEGIN CASE
+
+    CASE UPDATE.FILE="ORDER"
+        WRITE LOCK.DATA ON F.ORDER,ORD.NUM                  ;       * UPDATES THE ORDER FILE
+
+    CASE UPDATE.FILE="SHIPPING"
+        WRITE LOCK.DATA ON F.SHIPPING,ORD.NUM                  ;       * UPDATES THE SHIPPING FILE
+
+    CASE UPDATE.FILE="TRANSFERS"
+        WRITE LOCK.DATA. ON F.TRANSFERS,ORD.NUM                       ;       * UPDATES THE TRANSFERS FILE
+
+    CASE UPDATE.FILE="STOCK-TRANSFER"
+        WRITE LOCK.DATA ON F.STOCK.TRANSFER,ORD.NUM                   ;       * UPDATES THE STOCK-TRANSFER FILE
+
+    CASE 1                              ;           * THIS IS A CATCH ALL CASE IF NOTHING ELSE MATCHES
+        DEBUG
+
+END CASE
+
+CALL WMS.TIMESTAMP.UPDATE(TS.MSG, TS.KEY, "WMS", USER.ID, error)
+
+      IF SIGNATURE = "" THEN
+         SIGNATURE = "Qk2yAwAAAAAAAJIAAAB8AAAAoAAAACgAAAABAAEAAAAAACADAAAAAAAAAAAAAAIAAAACAAAAAAD/AAD/AAD/AAAAAAAA/0JHUnOPwvUoUbgeFR6F6wEzMzMTZmZmJmZmZgaZmZkJPQrXAyhcjzIAAAAAAAAAAAAAAAAEAAAAAAAAAAAAAAAAAAAAAAAAAP///wD/////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////4B/////////////////////////AD////////////////////////4eH/////////////////////////8f///////////////j8fgf/wfH4xx8/BHH4Pj/B////+Ph8A/+AceAHHz4AcfAOPwB////4+Hhh/wBxwAcfPDBx4Y4+HH////jwePH/HjHHhx84/HHjxj4/////+OBx+P/+MY/HHzj8ccfGPn/////44HH4//xxj8cfOPxxx8Y8AD////jEcfj/+HGPxx84/HHHxjwAP///+MRx+P/w8Y/HHzj8ccfGPj4////4jHjx/+Hxx4ceOHhxx8Y+Pj////gceAH/w/HABwA8AGDHxh4Yf///+Bx8A/+P8eAHAH4AQMfGDwD////4PH8P/4/x+Mc4/wxg58Znw/////g8f///jP////////H/////////+Hx///+Acf//////8f/////////4/H///8Dx///////x//////////j8f///4fH///////H//////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////w=="
+         SIG.VERS='1'
+      END
+
+CALL SUB.WMS.SIGNATURE.CAPTURE (ORD.NUM,USER.ID,DATE.TIME,S.NAME,D.NOTES,SIG.VERS,SIGNATURE)
+
+RELEASE
+RETURN

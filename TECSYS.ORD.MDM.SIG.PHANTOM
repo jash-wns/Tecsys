@@ -1,0 +1,243 @@
+SUBROUTINE TECSYS.ORD.MDM.SIG.PHANTOM
+* PROGRAM: TECSYS.ORD.MDM.SIG.PHANTOM
+*********************************************************************
+*
+* IDENTIFY AND DESERIALIZE INCOMING XML ORD_STAT_CHG_OUT FILES FROM TECSYS
+* WMS AND PASS OFF PROCESSING THE APPRORIATE DATA LOADING APPLICATION
+*                                                                   
+*********************************************************************
+CALL IQ.FILES
+COMMON FILES(200)
+
+AM = CHAR(254)
+VM = CHAR(253)
+SVM = CHAR(252)
+
+
+*ORD.NUM=''        ;  * <Package-OrderNumber> - The Key of the Delivery-Info file, pluse in <7,6>
+*USER.ID=''        ;  * <Manifest-Driver>  - Our Users ID <7,7>
+*TASK=''           ;  * <EventType>  - (1 = Delivered, 11 = Customer PU, 3 = In Transit, 4 = Loaded on Vehicle, 12 = Voided)
+*DATE.TIME=''      ;  * <EventTime>  =  2020-03-05 11:50:49  <--  need to change the '-' to a '/'  <7,4 and 5>
+*S.NAME=''         ;  * <SignatureName> =  the name of the person signing for the Order <5>
+*D.NOTES=''        ;  * <Package-DeliveryComment>   =  the 'Driver Notes' from the delivery
+*D.STATUS=''       ;  * <Package-DeliveryStatus>    =  different codes here as well - not sure yet what they mean - TBD
+*SIGNATURE=''      ;  * <SignatureImageTs>          =  the Signature as a .PNG
+*SIG.VERS='3'      ;  * <9> - '3' REQUIRED to be able to output correctly on the Invoice
+
+********************************
+* OPEN TECSYS WMS FOLDERS HERE *
+********************************
+
+OPEN "","MDM-SIG-OUT" TO ORD.DM.CHANGE ELSE DEBUG
+OPEN "","WMS-SIG-MDM-FOLDER" TO WMS.FOLDER ELSE DEBUG  ; * THIS IS USED FOR DEBUGGING AND NEEDS TO BE COMMENTED OUT UNLESS IN USE
+
+************************************************
+* GLOBAL VARIABLES                             *
+* THESE DO NOT GET RESET WHEN THE PHANTOM RUNS *
+************************************************
+
+LVL=2 ; * LVL IS THE NUMBER OF PREFIX LEVELS TO SKIP BEFORE PREPENDING TAGS IN THE XML FILE
+HEADER.TAG="MdmEventLogIfaceTs"
+EMPTY.FILE.LIST=''
+
+*************************************
+* THIS IS WHERE THE PHANTOM STARTS  *
+*************************************
+
+SELECT.FILES:
+
+
+*********************************************************
+* OVERALL FILE PROCESSING VARIABLES                     *
+* THESE RESET AFTER THE CURRENT FILE SELECT IS COMPLETE *
+*********************************************************
+
+MDM.KEYS=''         ;   * LIST OF CURRENT FILES IN THE DATA DIRECTORY
+
+
+*******************************************************
+* TRANSFORMATION VARIABLES ARE USED IN EACH FILE LOOP *
+* THESE ARE RESET AT DIFFERENT POINTS AND REUSED      *
+*******************************************************
+
+CUR.FILE=''          ;   * CONTAINS THE RAW DATA FROM THE XML FILE
+XML.PARSE=''        ;   * CONTAINS THE RETURN DATA AFTER THE FILE HAS BEEN DESERIALIZED
+END.OF.FILES=0      ;   * USED FOR LOOPIPNG THROUGH LIST OF FILES
+DEBUG.FILE=''
+
+**************************************************
+* CHECK IF THERE ARE FILES IN ANY OF THE FOLDERS *
+**************************************************
+
+SELECT ORD.DM.CHANGE TO MDM.KEYS
+
+LOOP
+    
+    READNEXT KEY FROM MDM.KEYS ELSE END.OF.FILES=1
+
+UNTIL END.OF.FILES DO
+    READ CUR.FILE FROM ORD.DM.CHANGE,KEY           ;       * READ DATA IN FROM THE FIRST FILE
+    DEBUG.FILE = CUR.FILE
+    EXECUTE "SET-RUNAWAY-LIMIT 6000000 (l"          ;       * SETTING THIS LIMIT HIGHER THEN SYSTEM LIMIT SO IT CAN INJEST THE SIGNATURE.
+    CALL XML.PARSER.SUB(CUR.FILE,XML.PARSE,LVL)      ;       * NORMALIZE XML DATA
+    EXECUTE "SET-RUNAWAY-LIMIT (r"
+    TOTAL.COUNT=DCOUNT(XML.PARSE<1>, CHAR(253))         ;       * USED TO DETERMINE TOTAL NUMBER OF POSITIONS IN THE FILE DATA
+
+
+****************************************************************
+* LOAD EACH ORDER BLOCK AND SEND TO ORDER TYPE LOADING PROGRAM *
+****************************************************************
+* VARIABLES TO BE RESET AFTER EACH FILE SHOULD GO HERE         *
+****************************************************************
+    START.POS=1
+    END.POS=TOTAL.COUNT
+    SINGLE.UPDATE=0
+    MULTIPLE.UPDATES=0
+    UPDATE.TYPE=''
+    END.OF.DATA=0
+
+
+    * IDENTIFY IF THE FILES HAS ONE UPDATE BLOCK OR MULTIPLE
+    LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS SETTING START.POS THEN
+        LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+            MULTIPLE.UPDATES=1
+        END ELSE
+            * IF WE DON'T FIND A 2ND DATA BLOCK THEN IT IS A FILE WITH A SINGLE UPDATE *
+            SINGLE.UPDATE=1      ;   * SET SINGLE UPDATE MARKER
+            END.OF.DATA=1
+        END
+
+
+***********************
+* LOCATE TYPE OF DATA *
+***********************
+        LOOP
+            LOCATE "EventType" IN XML.PARSE<1>,START.POS SETTING POS THEN 
+                IF END.OF.DATA # '1' THEN
+                    IF POS > START.POS AND POS < END.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>     ;   * MAKE SURE WE ARE USING DATA WITHIN THE UPDATE BOUNDS
+                END ELSE
+                    IF POS > START.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>        ;   * IF WE ARE AT THE END OF AN UPDATE FILE THERE WILL BE NO END.POS FOUND
+                END                                                             ;   * THAT IS OK AS ALL DATA AFTER THE START OF THE LAST ORDER MARKER IS RELATED
+            END ELSE
+                * WHAT DO WE IF WE CAN'T FIND AN ORDER TYPE? FOR NOW WE ARE SENDING AN EMAIL AND SKIPPING
+                FIND.TAG = "Package-OrderNumber"
+                TAG.DATA = ''
+                CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+                IF TAG.DATA # '' AND TAG.DATA # '0' ELSE TAG.DATA = "NO ORDER NUMBER FOUND"
+
+                EMAIL.LIST = ''
+                CUSTOM.FROM = ''
+                CUSTOM.SUBJECT='NO <EventType> TAG FOUND IN ':KEY
+                CUSTOM.BODY = 'TRYING TO UPDATE ORDER#: ': TAG.DATA
+                * CUSTOM.BODY<-1>='LINK TO ARCHIVE FILE: ':FILE.PATH:KEY
+                
+                CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+            END
+
+******************************************************
+* CALL THE TYPE SPECIFIC PROGRAM TO PROCESS THE DATA *
+******************************************************
+            IF UPDATE.TYPE="1" OR UPDATE.TYPE="11" THEN
+                CALL SUB.TECSYS.MDM.ORD.COMPLETE.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+            IF UPDATE.TYPE="3" THEN
+                CALL SUB.TECSYS.MDM.ORD.TRANSIT.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+            IF UPDATE.TYPE="4" THEN
+                CALL SUB.TECSYS.MDM.ORD.LOADED.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+            IF UPDATE.TYPE="12" THEN
+                CALL SUB.TECSYS.MDM.ORD.VOIDED.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+        UNTIL END.OF.DATA DO
+**************************
+* LOCATE NEXT DATA BLOCK *
+**************************
+            IF MULTIPLE.UPDATES='1' THEN
+                START.POS=END.POS
+                LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+                    IF END.POS >= TOTAL.COUNT THEN
+                        END.POS=TOTAL.COUNT
+                        END.OF.DATA=1
+                    END
+                END ELSE
+                  END.POS=TOTAL.COUNT
+                  END.OF.DATA=1
+                END
+            END
+        REPEAT
+
+    END ELSE
+        LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+            EMPTY.FILE.LIST<2,POS> += 1
+        END ELSE
+            EMPTY.FILE.LIST<-1> = KEY
+            LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+                EMPTY.FILE.LIST<2,POS> += 1
+            END
+        END
+
+        IF EMPTY.FILE.LIST<2,POS> > 5 THEN
+            EMAIL.LIST = ''
+            CUSTOM.FROM = ''
+            CUSTOM.SUBJECT="Repeat Processing Detected"
+            CUSTOM.BODY = 'Attemping to process file':KEY
+            CUSTOM.BODY<-1> = 'Attempted processing: ':EMPTY.FILE.LIST<2,POS>:'times.'
+            
+            CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+        END
+        
+        GOTO NEXT.IN.LIST
+    END
+
+    * HERE WE WRITE THE DATA FILE OUT TO A SUB FOLDER IN THE ORIGINAL DIRECTORY BEFORE WE DELETE THE FILE
+    * THIS IS PROBABLY JUST NEEDED FOR INTEGRATION TEST AND CAN BE COMMENTED OUT INCASE NEEDED FOR DEBUGGING IN THE FUTURE
+    
+        FIND.TAG = "Package-OrderNumber"
+        TAG.DATA = ''
+        CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+
+        IF TAG.DATA # '' AND TAG.DATA # '0' THEN
+            TAG.DATA = TAG.DATA
+        END ELSE
+            TAG.DATA = "NO TIED ORDER"
+        END
+
+        FILE.NAME=KEY
+        CONVERT ".xml" TO "" IN FILE.NAME
+        
+        IF MULTIPLE.UPDATES='1' THEN
+*            WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'+':'.xml'
+            WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:'+ MDM':'.xml'
+        END ELSE
+*            WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'.xml'
+            WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:' MDM.xml'
+        END
+    
+DELETE ORD.DM.CHANGE,KEY              ;       * DELETE FILE NOW THAT IT HAS BEE PROCESSED
+
+IF DCOUNT(EMPTY.FILE.LIST<1>, CHAR(253)) > 0 THEN
+    LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+        EMPTY.FILE.LIST<POS> = 0
+        EMPTY.FILE.LIST<2,POS> = 0
+    END
+END ELSE
+    EMPTY.FILE.LIST = 0
+END
+
+NEXT.IN.LIST:
+
+REPEAT
+          PRINT '***************************************'
+          PRINT '* TECSYS.SIGNATURE.SA.PHANTOM *'
+          PRINT '***************************************'
+          PRINT
+
+RETURN
+
+*SLEEP 3
+*GOTO SELECT.FILES
