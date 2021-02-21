@@ -1,0 +1,250 @@
+SUBROUTINE TECSYS.OUTBOUND.ORD.SHIPPED.PHANTOM
+*PROGRAM: TECSYS.OUTBOUND.ORD.SHIPPED.PHANTOM
+*********************************************************************
+* 
+* IDENTIFY AND DESERIALIZE INCOMING XML SHIP_RSL_OUT FILES FROM TECSYS
+* WMS AND PASS OFF PROCESSING THE APPRORIATE DATA LOADING APPLICATION
+*                                                                   
+*********************************************************************
+CALL IQ.FILES
+COMMON FILES(200)
+
+AM = CHAR(254)
+VM = CHAR(253)
+SVM = CHAR(252)
+
+
+********************************
+* OPEN TECSYS WMS FOLDERS HERE *
+********************************
+
+OPEN "","SHIP_RSL_OUT" TO SHIP.RESULT.OUT ELSE DEBUG
+OPEN "","WMS_SHIP_RSL_FOLDER" TO WMS.FOLDER ELSE DEBUG  ; * THIS IS USED FOR DEBUGGING AND NEEDS TO BE COMMENTED OUT UNLESS IN USE
+
+************************************************
+* GLOBAL VARIABLES                             *
+* THESE DO NOT GET RESET WHEN THE PHANTOM RUNS *
+************************************************
+
+LVL=2 ; * LVL IS THE NUMBER OF PREFIX LEVELS TO SKIP BEFORE PREPENDING TAGS IN THE XML FILE
+HEADER.TAG="WmsShippingResultOutSiEs"
+EMPTY.FILE.LIST=''
+
+*************************************
+* THIS IS WHERE THE PHANTOM STARTS  *
+*************************************
+
+SELECT.FILES:
+
+
+*********************************************************
+* OVERALL FILE PROCESSING VARIABLES                     *
+* THESE RESET AFTER THE CURRENT FILE SELECT IS COMPLETE *
+*********************************************************
+
+SRO.KEYS=''         ;   * LIST OF CURRENT FILES IN THE SHIPPING RESULTS OUT DIRECTORY
+
+
+*******************************************************
+* TRANSFORMATION VARIABLES ARE USED IN EACH FILE LOOP *
+* THESE ARE RESET AT DIFFERENT POINTS AND REUSED      *
+*******************************************************
+
+CUR.FILE=''          ;   * CONTAINS THE RAW DATA FROM THE XML FILE
+XML.PARSE=''        ;   * CONTAINS THE RETURN DATA AFTER THE FILE HAS BEEN DESERIALIZED
+END.OF.FILES=0      ;   * USED FOR LOOPIPNG THROUGH LIST OF FILES
+DEBUG.FILE=''          ;   * USED TO WRITE RAW XML TO WMS FOLDER
+
+**************************************************
+* CHECK IF THERE ARE FILES IN ANY OF THE FOLDERS *
+**************************************************
+
+SELECT SHIP.RESULT.OUT TO SRO.KEYS
+
+LOOP
+
+    READNEXT KEY FROM SRO.KEYS ELSE END.OF.FILES=1
+
+UNTIL END.OF.FILES DO
+    READ CUR.FILE FROM SHIP.RESULT.OUT,KEY           ;       * READ DATA IN FROM THE FIRST FILE
+    DEBUG.FILE=CUR.FILE                              ;     * SAVE XML DATA BEFORE IT IS TRANSFERED. THIS IS USED FOR DEBUGGING AND NEEDS TO BE COMMENTED OUT UNLESS IN USE
+    CALL XML.PARSER.SUB(CUR.FILE,XML.PARSE,LVL)      ;       * NORMALIZE XML DATA
+    TOTAL.COUNT=DCOUNT(XML.PARSE<1>, CHAR(253))         ;       * USED TO DETERMINE TOTAL NUMBER OF POSITIONS IN THE FILE DATA
+*    WRITE XML.PARSE ON FILE.SAVE,KEY                 ;       * USED FOR TESTING TO WRITE NORMALIZED DATA TO TEMPORARY FILE
+
+
+****************************************************************
+* LOAD EACH ORDER BLOCK AND SEND TO ORDER TYPE LOADING PROGRAM *
+****************************************************************
+* VARIABLES TO BE RESET AFTER EACH FILE SHOULD GO HERE         *
+****************************************************************
+    START.POS=1
+    END.POS=TOTAL.COUNT
+    SINGLE.ORDER=0
+    MULTIPLE.ORDER=0
+    UPDATE.TYPE=''
+    END.OF.DATA=0
+
+
+    * IDENTIFY IF THE FILES HAS ONE UPDATE BLOCK OR MULTIPLE
+    LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS SETTING START.POS THEN
+        LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+            MULTIPLE.ORDER=1
+        END ELSE
+            * IF WE DON'T FIND A 2ND DATA BLOCK THEN IT IS A FILE WITH A SINGLE ORDER *
+            SINGLE.ORDER=1      ;   * SET SINGLE ORDER MARKER
+            END.OF.DATA=1
+        END
+
+
+***********************
+* LOCATE TYPE OF DATA *
+***********************
+        LOOP
+
+*~* 04/27/20 - no longer passing in the results - look at CustomChar7 - jemi
+*            LOCATE "WnsOrderTransCodeUp" IN XML.PARSE<1>,START.POS SETTING POS THEN     ;   * ?? WHAT DOES A CURRENT UPDATE LOOK* LIKE FOR THIS TAG ?? 
+
+            LOCATE "CustomChar7" IN XML.PARSE<1>,START.POS SETTING POS THEN                 
+                IF END.OF.DATA # '1' THEN
+                        IF POS > START.POS AND POS < END.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>     ;   * MAKE SURE WE ARE USING DATA WITHIN THE ORDER BOUNDS
+                END ELSE
+                        IF POS > START.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>        ;   * IF WE ARE AT THE END OF AN ORDER FILE THERE WILL BE NO END.POS FOUND
+                END                                                             ;   * THAT IS OK AS ALL DATA AFTER THE START OF THE LAST ORDER MARKER IS RELATED
+            END          
+
+            IF UPDATE.TYPE = "" THEN
+                LOCATE "WnsOrderTransCodeUp" IN XML.PARSE<1>,START.POS SETTING POS THEN                  
+                    IF END.OF.DATA # '1' THEN
+                            IF POS > START.POS AND POS < END.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>     ;   * MAKE SURE WE ARE USING DATA WITHIN THE ORDER BOUNDS
+                    END ELSE
+                            IF POS > START.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>        ;   * IF WE ARE AT THE END OF AN ORDER FILE THERE WILL BE NO END.POS FOUND
+                    END             
+                END
+            END
+
+                * WHAT DO WE IF WE CAN'T FIND ANY UPDATE TYPE? DO WE ASSUME IT IS A SALES ORDER? OR DO WE TRY TO KEY OFF ANOTHER FIELD
+                * DO WE SEND AN EMAIL AND RETURN? -JEMI 06/23/20
+                * ADDED IN ERROR REPORTING TO SEND AN EMAIL IF NO ORDER TYPE IS FOUND - JASH
+
+            IF UPDATE.TYPE = '' THEN
+
+                FIND.TAG = "OutboundOrder"
+                TAG.DATA = ''
+                CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+                IF TAG.DATA # '' AND TAG.DATA # '0' ELSE TAG.DATA = "NO ORDER NUMBER FOUND"
+
+                EMAIL.LIST = ''
+                CUSTOM.FROM = ''
+                CUSTOM.SUBJECT='NO <CustomChar7>/<WnsOrderTransCodeUp> TAG FOUND IN ':KEY
+                CUSTOM.BODY = 'TRYING TO UPDATE ORDER#: ': TAG.DATA
+                
+                CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+            END
+            
+******************************************************
+* CALL THE TYPE SPECIFIC PROGRAM TO PROCESS THE DATA *
+******************************************************
+
+            IF UPDATE.TYPE="OSAL" OR UPDATE.TYPE="IRET" THEN
+                  CALL SUB.TECSYS.ORD.SHP.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+          
+            IF UPDATE.TYPE="OXFR" THEN
+                CALL SUB.TECSYS.OUT.XF.SHIP.UPDATE (XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+            
+            IF UPDATE.TYPE="ORTV" THEN
+               CALL SUB.TECSYS.RGA.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+            
+        UNTIL END.OF.DATA DO
+
+**************************
+* LOCATE NEXT DATA BLOCK *
+**************************
+            IF MULTIPLE.ORDER='1' THEN
+                START.POS=END.POS
+                LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+                    IF END.POS >= TOTAL.COUNT THEN
+                        END.POS=TOTAL.COUNT
+                        END.OF.DATA=1
+                    END
+                END ELSE
+                  END.POS=TOTAL.COUNT
+                  END.OF.DATA=1
+                END
+            END
+        REPEAT
+
+    END ELSE   
+        * IF WE DON'T FIND ANY DATA BLOCK TAG WHAT DO WE DO WITH THE FILE? WE DO THAT HERE
+        LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+            EMPTY.FILE.LIST<2,POS> += 1
+        END ELSE
+            EMPTY.FILE.LIST<-1> = KEY
+            LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+                EMPTY.FILE.LIST<2,POS> += 1
+            END
+        END
+
+        IF EMPTY.FILE.LIST<2,POS> > 5 THEN
+            EMAIL.LIST = ''
+            CUSTOM.FROM = ''
+            CUSTOM.SUBJECT="Repeat Processing Detected"
+            CUSTOM.BODY = 'Attemping to process file':KEY
+            CUSTOM.BODY<-1> = 'Attempted processing: ':EMPTY.FILE.LIST<2,POS>:'times.'
+            
+            CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+        END
+        
+        GOTO NEXT.IN.LIST
+    END
+
+    * HERE WE WRITE THE DATA FILE OUT TO A SUB FOLDER IN THE ORIGINAL DIRECTORY BEFORE WE DELETE THE FILE
+    * THIS IS PROBABLY JUST NEEDED FOR INTEGRATION TEST AND CAN BE COMMENTED OUT UNLESS NEEDED FOR DEBUGGING IN THE FUTURE
+
+    FIND.TAG = "OutboundOrder"
+    TAG.DATA = ''
+    CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+
+    IF TAG.DATA # '' AND TAG.DATA # '0' THEN
+        TAG.DATA = TAG.DATA
+    END ELSE
+        TAG.DATA = "NO TIED ORDER"
+    END
+
+    FILE.NAME=KEY
+    CONVERT ".xml" TO "" IN FILE.NAME
+
+    IF MULTIPLE.ORDER='1' THEN
+*        WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'+':'.xml'
+        WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:'-Shipped +.xml'
+    END ELSE
+*        WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'.xml'
+        WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:'-Shipped.xml'
+    END
+
+
+    DELETE SHIP.RESULT.OUT,KEY              ;       * DELETE FILE NOW THAT IT HAS BEEn PROCESSED
+
+IF DCOUNT(EMPTY.FILE.LIST<1>, CHAR(253)) > 0 THEN
+    LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+        EMPTY.FILE.LIST<POS> = 0
+        EMPTY.FILE.LIST<2,POS> = 0
+    END
+END ELSE
+    EMPTY.FILE.LIST = 0
+END
+
+NEXT.IN.LIST:
+REPEAT
+          PRINT '***************************************'
+          PRINT '* TECSYS.OUTBOUND.ORD.SHIPPED.PHANTOM *'
+          PRINT '***************************************'
+          PRINT
+
+RETURN
+
+*SLEEP 5
+*GOTO SELECT.FILES

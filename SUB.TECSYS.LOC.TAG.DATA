@@ -1,0 +1,39 @@
+SUBROUTINE SUB.TECSYS.LOC.TAG.DATA(C.DATA,C.FIND.TAG,P.TAG.DATA,C.START.POS,C.END.POS,C.KEY)
+**************************************************************************
+*
+* LOOK UP TAG IN PARSED XML DATA SET, FILES SHOULD BE FORMATTED THROUGH
+* XML.PARSER.SUB
+* 
+* BE CAREFUL AS THIS CAN RETURN SOME LONG DATA STRINGS AS ERROR CODES
+*                                                                   
+**************************************************************************
+
+* DEFINE CONSTANTS *
+AM = CHAR(254)
+VM = CHAR(253)
+SVM = CHAR(252)
+
+KEY = C.KEY
+FIND.TAGS = C.FIND.TAG
+FILE.DATA = C.DATA
+START.MARKER = C.START.POS
+END.MARKER = C.END.POS
+
+TOTAL.TAGS = DCOUNT(FIND.TAGS,AM)
+
+FOR I = 1 TO TOTAL.TAGS
+
+    LOCATE FIND.TAGS<I> IN FILE.DATA<1>,START.MARKER SETTING POS THEN
+        IF POS > START.MARKER AND POS < END.MARKER THEN
+            P.TAG.DATA<I>=FILE.DATA<3,POS>
+            IF P.TAG.DATA<I> = '' THEN P.TAG.DATA<I> = '0'
+        END ELSE
+            P.TAG.DATA<I> = "NO TAG DATA FOUND"
+        END
+    END ELSE
+        P.TAG.DATA<I> = "TAG NOT FOUND IN FILE"
+    END
+
+NEXT I
+
+RETURN
