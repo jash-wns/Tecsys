@@ -1,0 +1,254 @@
+* PROGRAM: TECSYS.INBOUND.INV.ADJ.PHANTOM
+*********************************************************************
+*
+* IDENTIFY AND DESERIALIZE INCOMING XML SHIP_RSL_OUT FILES FROM TECSYS
+* WMS AND PASS OFF PROCESSING THE APPRORIATE DATA LOADING APPLICATION
+*                                                                   
+*********************************************************************
+CALL IQ.FILES
+COMMON FILES(200)
+
+AM = CHAR(254)
+VM = CHAR(253)
+SVM = CHAR(252)
+
+
+********************************
+* OPEN TECSYS WMS FOLDERS HERE *
+********************************
+
+OPEN "","INV_ADJ_OUT" TO INV.ADJ.OUT ELSE DEBUG ; * THE DATA DIRECTORY WE WILL BE RUNNING AGAINST
+OPEN "","WMS_INV_ADJ_FOLDER" TO WMS.FOLDER ELSE DEBUG  ; * THIS IS USED FOR DEBUGGING AND NEEDS TO BE COMMENTED OUT UNLESS IN USE
+
+************************************************
+* GLOBAL VARIABLES                             *
+* THESE DO NOT GET RESET WHEN THE PHANTOM RUNS *
+************************************************
+
+LVL=2 ; * LVL IS THE NUMBER OF PREFIX LEVELS TO SKIP BEFORE PREPENDING TAGS IN THE XML FILE
+HEADER.TAG="WmsInventoryAdjustmentOutSiEs"
+EMPTY.FILE.LIST=''
+
+*************************************
+* THIS IS WHERE THE PHANTOM STARTS  *
+*************************************
+
+SELECT.FILES:
+
+
+*********************************************************
+* OVERALL FILE PROCESSING VARIABLES                     *
+* THESE RESET AFTER THE CURRENT FILE SELECT IS COMPLETE *
+*********************************************************
+
+ADJ.KEYS=''         ;   * LIST OF CURRENT FILES IN THE DATA DIRECTORY
+
+
+*******************************************************
+* TRANSFORMATION VARIABLES ARE USED IN EACH FILE LOOP *
+* THESE ARE RESET AT DIFFERENT POINTS AND REUSED      *
+*******************************************************
+
+CUR.FILE=''          ;   * CONTAINS THE RAW DATA FROM THE XML FILE
+XML.PARSE=''        ;   * CONTAINS THE RETURN DATA AFTER THE FILE HAS BEEN DESERIALIZED
+END.OF.FILES=0      ;   * USED FOR LOOPIPNG THROUGH LIST OF FILES
+DEBUG.FILE=''          ;   * USED TO WRITE RAW XML TO WMS FOLDER
+
+**************************************************
+* CHECK IF THERE ARE FILES IN ANY OF THE FOLDERS *
+**************************************************
+
+SELECT INV.ADJ.OUT TO ADJ.KEYS
+
+LOOP
+
+    READNEXT KEY FROM ADJ.KEYS ELSE END.OF.FILES=1
+
+UNTIL END.OF.FILES DO
+    READ CUR.FILE FROM INV.ADJ.OUT,KEY           ;       * READ DATA IN FROM THE FIRST FILE
+    DEBUG.FILE=CUR.FILE                              ;     * SAVE XML DATA BEFORE IT IS TRANSFERED. THIS IS USED FOR DEBUGGING AND NEEDS TO BE COMMENTED OUT UNLESS IN USE
+    CALL XML.PARSER.SUB(CUR.FILE,XML.PARSE,LVL)      ;       * NORMALIZE XML DATA
+    TOTAL.COUNT=DCOUNT(XML.PARSE<1>, CHAR(253))         ;       * USED TO DETERMINE TOTAL NUMBER OF POSITIONS IN THE FILE DATA
+
+
+****************************************************************
+* LOAD EACH ORDER BLOCK AND SEND TO ORDER TYPE LOADING PROGRAM *
+****************************************************************
+* VARIABLES TO BE RESET AFTER EACH FILE SHOULD GO HERE         *
+****************************************************************
+    START.POS=1
+    END.POS=TOTAL.COUNT
+    SINGLE.UPDATE=0
+    MULTIPLE.UPDATES=0
+    UPDATE.TYPE=''
+    END.OF.DATA=0
+
+
+    * IDENTIFY IF THE FILES HAS ONE UPDATE BLOCK OR MULTIPLE
+    LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS SETTING START.POS THEN
+        LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+            MULTIPLE.UPDATES=1
+        END ELSE
+            * IF WE DON'T FIND A 2ND DATA BLOCK THEN IT IS A FILE WITH A SINGLE UPDATE *
+            SINGLE.UPDATE=1      ;   * SET SINGLE UPDATE MARKER
+            END.OF.DATA=1
+        END
+
+
+***********************
+* LOCATE TYPE OF DATA *
+***********************
+        LOOP
+            LOCATE "Task" IN XML.PARSE<1>,START.POS SETTING POS THEN 
+                IF END.OF.DATA # '1' THEN
+                    IF POS > START.POS AND POS < END.POS THEN UPDATE.TYPE<1,1>=XML.PARSE<3,POS>     ;   * MAKE SURE WE ARE USING DATA WITHIN THE UPDATE BOUNDS
+                END ELSE
+                    IF POS > START.POS THEN UPDATE.TYPE<1,1>=XML.PARSE<3,POS>        ;   * IF WE ARE AT THE END OF AN UPDATE FILE THERE WILL BE NO END.POS FOUND
+                END                                                             ;   * THAT IS OK AS ALL DATA AFTER THE START OF THE LAST ORDER MARKER IS RELATED
+            END ELSE
+                * WHAT DO WE IF WE CAN'T FIND ANY TASK TAG? DO WE ASSUME IT IS AN ADJUSTMENT? FOR NOW I'M SENDING AN EMAIL AND SKIPPING
+                FIND.TAG = "Item"
+                TAG.DATA = ''
+                CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+                IF TAG.DATA # '' AND TAG.DATA # '0' ELSE TAG.DATA = "NO ITEM ID FOUND"
+
+                EMAIL.LIST = 'support@goblueteam.com'
+                CUSTOM.FROM = ''
+                CUSTOM.SUBJECT='NO <TASK> TAG FOUND IN ':KEY
+                CUSTOM.BODY = 'TRYING TO UPDATE PART#: ': TAG.DATA
+                CUSTOM.BODY<-1>='LINK TO ARCHIVE FILE: ':KEY
+                
+                CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+            END
+
+            LOCATE "Reason" IN XML.PARSE<1>,START.POS SETTING POS THEN 
+                IF END.OF.DATA # '1' THEN
+                    IF POS > START.POS AND POS < END.POS THEN UPDATE.TYPE<1,2>=XML.PARSE<3,POS>     ;   * MAKE SURE WE ARE USING DATA WITHIN THE UPDATE BOUNDS
+                END ELSE
+                    IF POS > START.POS THEN UPDATE.TYPE<1,2>=XML.PARSE<3,POS>        ;   * IF WE ARE AT THE END OF AN UPDATE FILE THERE WILL BE NO END.POS FOUND
+                END                                                             ;   * THAT IS OK AS ALL DATA AFTER THE START OF THE LAST ORDER MARKER IS RELATED
+            END ELSE
+                * WHAT DO WE IF WE CAN'T FIND ANY REASON TAG? DO WE ASSUME IT IS A HOST ADJUSTMENT? FOR NOW I'M SENDING AN EMAIL AND SKIPPING
+                FIND.TAG = "Item"
+                TAG.DATA = ''
+                CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+                IF TAG.DATA # '' AND TAG.DATA # '0' ELSE TAG.DATA = "NO ITEM ID FOUND"
+
+                EMAIL.LIST = 'support@goblueteam.com'
+                CUSTOM.FROM = ''
+                CUSTOM.SUBJECT='NO <REASON> TAG FOUND IN ':KEY
+                CUSTOM.BODY = 'TRYING TO UPDATE PART#: ': TAG.DATA
+                CUSTOM.BODY<-1>='LINK TO ARCHIVE FILE: ':KEY
+                
+                CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+            END
+
+            
+******************************************************
+* CALL THE TYPE SPECIFIC PROGRAM TO PROCESS THE DATA *
+******************************************************
+            IF UPDATE.TYPE<1,1>="ADJ" AND UPDATE.TYPE<1,2>="HADJ" THEN
+                CALL SUB.TECSYS.INV.ADJ.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+            IF UPDATE.TYPE<1,1>="ADJ" AND UPDATE.TYPE<1,2>="TADJ" THEN
+                NULL ;* No Adjustment Needed, this is a WMS/Tecsys only adjustment.
+            END
+
+            IF UPDATE.TYPE<1,1>="ADJ" AND UPDATE.TYPE<1,2>="UNRECEIVED" THEN
+                NULL ;*CALL SUB.TECSYS.INV.ADJ.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+            IF UPDATE.TYPE<1,1>="ADJ" AND UPDATE.TYPE<1,2>="DISASSOCIATE_ORDER" THEN
+                NULL ;* No Adjustment Needed at this time JASH 5/21/20
+            END
+
+            IF UPDATE.TYPE<1,1>="ADJ" AND UPDATE.TYPE<1,2>="PROD FINISH BOM" THEN
+                CALL SUB.TECSYS.INV.WO.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+            IF UPDATE.TYPE<1,1>="ADJ" AND UPDATE.TYPE<1,2>="PROD PICK COMPONENT" THEN
+                CALL SUB.TECSYS.INV.WO.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+            
+            IF UPDATE.TYPE<1,1>="CADJ" THEN
+                CALL SUB.TECSYS.INV.CADJ.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+        UNTIL END.OF.DATA DO
+**************************
+* LOCATE NEXT DATA BLOCK *
+**************************
+            IF MULTIPLE.UPDATES='1' THEN
+                START.POS=END.POS
+                LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+                    IF END.POS >= TOTAL.COUNT THEN
+                        END.POS=TOTAL.COUNT
+                        END.OF.DATA=1
+                    END
+                END ELSE
+                  END.POS=TOTAL.COUNT
+                  END.OF.DATA=1
+                END
+            END
+        REPEAT
+
+    END ELSE
+        LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+            EMPTY.FILE.LIST<2,POS> += 1
+        END ELSE
+            EMPTY.FILE.LIST<-1> = KEY
+            LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+                EMPTY.FILE.LIST<2,POS> += 1
+            END
+        END
+
+        IF EMPTY.FILE.LIST<2,POS> > 5 THEN
+            EMAIL.LIST = ''
+            CUSTOM.FROM = ''
+            CUSTOM.SUBJECT="Repeat Processing Detected"
+            CUSTOM.BODY = 'Attemping to process file':KEY
+            CUSTOM.BODY<-1> = 'Attempted processing: ':EMPTY.FILE.LIST<2,POS>:'times.'
+            
+            CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+        END
+        
+        GOTO NEXT.IN.LIST
+
+    END
+
+    * HERE WE WRITE THE DATA FILE OUT TO A SUB FOLDER IN THE ORIGINAL DIRECTORY BEFORE WE DELETE THE FILE
+    * THIS IS PROBABLY JUST NEEDED FOR INTEGRATION TEST AND CAN BE COMMENTED OUT UNLESS NEEDED FOR DEBUGGING IN THE FUTURE
+
+    FIND.TAG = "OutboundOrder":AM:"InboundOrder"
+    TAG.DATA = ''
+    CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+
+    IF TAG.DATA<1> # '' AND TAG.DATA<1> # '0' THEN
+        TAG.DATA = TAG.DATA<1>
+    END ELSE
+        IF TAG.DATA<2> # '' AND TAG.DATA<2> # '0' THEN
+            TAG.DATA = TAG.DATA<2>
+        END ELSE
+            TAG.DATA = "NO TIED ORDER"
+        END
+    END
+
+    FILE.NAME=KEY
+    CONVERT ".xml" TO "" IN FILE.NAME
+
+    IF MULTIPLE.UPDATES='1' THEN
+        WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'+':'.xml'
+    END ELSE
+        WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'.xml'
+    END
+
+    
+    DELETE INV.ADJ.OUT,KEY              ;       * DELETE FILE NOW THAT IT HAS BEE PROCESSED
+
+NEXT.IN.LIST:
+REPEAT
+
+
+SLEEP 3
+GOTO SELECT.FILES

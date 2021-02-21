@@ -1,0 +1,242 @@
+SUBROUTINE TECSYS.INV.STAT.CHG.PHANTOM
+* PROGRAM: TECSYS.INV.STAT.CHG.PHANTOM
+*********************************************************************
+*
+* IDENTIFY AND DESERIALIZE INCOMING XML ORD_STAT_CHG_OUT FILES FROM TECSYS
+* WMS AND PASS OFF PROCESSING THE APPRORIATE DATA LOADING APPLICATION
+*                                                                   
+*********************************************************************
+CALL IQ.FILES
+COMMON FILES(200)
+
+AM = CHAR(254)
+VM = CHAR(253)
+SVM = CHAR(252)
+
+********************************
+* OPEN TECSYS WMS FOLDERS HERE *
+********************************
+
+OPEN "INVENTORY" TO F.INV ELSE ERROR = "Unable to open INVENTORY file!"
+OPEN "PRODUCT-MASTER" TO F.PM ELSE ERROR  = "Unable to open PRODUCT-MASTER file!"
+OPEN "ORDER" TO F.ORD ELSE ERROR = "Unable to open ORDER file!"
+OPEN "STOCK-TRANSFER" TO F.XFER ELSE ERROR = "Unable to open STOCK-TRANSFER file!"
+OPEN "PO" TO F.PO ELSE ERROR = "Unable to open PO file!"
+OPEN "","INV-STAT-CHG-OUT" TO INV.STAT.CHANGE ELSE DEBUG ; * THE DATA DIRECTORY WE WILL BE RUNNING AGAINST
+OPEN "","WMS_INV_STAT_FOLDER" TO WMS.FOLDER ELSE DEBUG  ; * THIS IS USED FOR DEBUGGING AND NEEDS TO BE COMMENTED OUT UNLESS IN USE
+
+************************************************
+* GLOBAL VARIABLES                             *
+* THESE DO NOT GET RESET WHEN THE PHANTOM RUNS *
+************************************************
+
+LVL=2 ; * LVL IS THE NUMBER OF PREFIX LEVELS TO SKIP BEFORE PREPENDING TAGS IN THE XML FILE
+HEADER.TAG="WmsInventoryStatusChangeOutSiEs"
+EMPTY.FILE.LIST=''
+
+*************************************
+* THIS IS WHERE THE PHANTOM STARTS  *
+*************************************
+
+SELECT.FILES:
+
+
+*********************************************************
+* OVERALL FILE PROCESSING VARIABLES                     *
+* THESE RESET AFTER THE CURRENT FILE SELECT IS COMPLETE *
+*********************************************************
+
+ORD.KEYS=''         ;   * LIST OF CURRENT FILES IN THE DATA DIRECTORY
+
+
+*******************************************************
+* TRANSFORMATION VARIABLES ARE USED IN EACH FILE LOOP *
+* THESE ARE RESET AT DIFFERENT POINTS AND REUSED      *
+*******************************************************
+
+CUR.FILE=''          ;   * CONTAINS THE RAW DATA FROM THE XML FILE
+XML.PARSE=''        ;   * CONTAINS THE RETURN DATA AFTER THE FILE HAS BEEN DESERIALIZED
+END.OF.FILES=0      ;   * USED FOR LOOPIPNG THROUGH LIST OF FILES
+DEBUG.FILE=''
+
+**************************************************
+* CHECK IF THERE ARE FILES IN ANY OF THE FOLDERS *
+**************************************************
+
+SELECT INV.STAT.CHANGE TO ORD.KEYS
+
+LOOP
+
+    READNEXT KEY FROM ORD.KEYS ELSE END.OF.FILES=1
+
+UNTIL END.OF.FILES DO
+    READ CUR.FILE FROM INV.STAT.CHANGE,KEY           ;       * READ DATA IN FROM THE FIRST FILE
+    DEBUG.FILE = CUR.FILE   ;   *THIS IS FOR WRITING FILES OUT TO WMS SUB-FOLDER FOR DEBUGGING
+    CALL XML.PARSER.SUB(CUR.FILE,XML.PARSE,LVL)      ;       * NORMALIZE XML DATA
+    TOTAL.COUNT=DCOUNT(XML.PARSE<1>, CHAR(253))         ;       * USED TO DETERMINE TOTAL NUMBER OF POSITIONS IN THE FILE DATA
+
+
+****************************************************************
+* LOAD EACH ORDER BLOCK AND SEND TO ORDER TYPE LOADING PROGRAM *
+****************************************************************
+* VARIABLES TO BE RESET AFTER EACH FILE SHOULD GO HERE         *
+****************************************************************
+    START.POS=1
+    END.POS=TOTAL.COUNT
+    SINGLE.UPDATE=0
+    MULTIPLE.UPDATES=0
+    UPDATE.TYPE=''
+    END.OF.DATA=0
+
+    * IDENTIFY IF THE FILES HAS ONE UPDATE BLOCK OR MULTIPLE
+    LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS SETTING START.POS THEN
+        LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+            MULTIPLE.UPDATES=1
+        END ELSE
+            * IF WE DON'T FIND A 2ND DATA BLOCK THEN IT IS A FILE WITH A SINGLE UPDATE *
+            SINGLE.UPDATE=1      ;   * SET SINGLE UPDATE MARKER
+            END.OF.DATA=1
+        END
+
+
+***********************
+* LOCATE TYPE OF DATA *
+***********************
+        LOOP
+            LOCATE "Reason" IN XML.PARSE<1>,START.POS SETTING POS THEN 
+                IF END.OF.DATA # '1' THEN
+                    IF POS > START.POS AND POS < END.POS THEN
+                        UPDATE.TYPE=XML.PARSE<3,POS>     ;   * MAKE SURE WE ARE USING DATA WITHIN THE UPDATE BOUNDS
+                    END
+                END ELSE
+                    IF POS > START.POS AND END.OF.DATA ='1' THEN
+                        UPDATE.TYPE=XML.PARSE<3,POS>        ;   * IF WE ARE AT THE END OF AN UPDATE FILE THERE WILL BE NO END.POS FOUND * THAT IS OK AS ALL DATA AFTER THE START OF THE LAST ORDER MARKER IS RELATED
+                    END ELSE             
+                    GOTO NO.TAG
+                    END
+                END              
+            END ELSE
+                *IF WE CAN'T FIND THE TAG FOR TYPE OF UPDATE THEN SEND A NOTIFICATION EMAIL AND SKIP THE DATA BLOCK
+NO.TAG:              
+                FIND.TAG = "Item"
+                TAG.DATA = ''
+                CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+                IF TAG.DATA # '' AND TAG.DATA # '0' ELSE TAG.DATA = "NO ITEM ID FOUND"
+                
+                EMAIL.LIST = 'support@goblueteam.com'
+                CUSTOM.FROM = 'DO_NOT_REPLY@WNS1.COM'
+                CUSTOM.SUBJECT='NO <REASON> TAG FOUND IN ':KEY
+                CUSTOM.BODY = 'TRYING TO UPDATE PART#: ': TAG.DATA
+                CUSTOM.BODY<-1>='LINK TO ARCHIVE FILE: ':KEY
+                CUSTOM.BODY<-1>='NO UPDATES MADE IN MARK FOR THIS TRANSACTION'
+                
+                CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+                GOTO DATA.DELETE
+            END
+
+******************************************************
+* CALL THE TYPE SPECIFIC PROGRAM TO PROCESS THE DATA *
+******************************************************
+            IF UPDATE.TYPE="RV" OR UPDATE.TYPE="DMG" THEN
+                CALL SUB.TECSYS.INV.STAT.DMG.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS,KEY)
+            END
+
+            IF UPDATE.TYPE="MOVE" THEN
+                NULL
+            END
+
+            IF UPDATE.TYPE="RMAX" THEN
+                NULL
+            END
+
+            IF UPDATE.TYPE="DISASSOCIATE_ORDER" THEN
+                CALL SUB.TECSYS.INV.STAT.DISASSOCIATE.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS,KEY)
+            END
+
+        UNTIL END.OF.DATA DO
+**************************
+* LOCATE NEXT DATA BLOCK *
+**************************
+            IF MULTIPLE.UPDATES='1' THEN
+                * THIS IS RE-POSITIONING THE DATA MARKERS IF THERE IS MULTIPLE UPDATES IN ONE DATA FILE *
+                START.POS=END.POS
+                LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+                    IF END.POS >= TOTAL.COUNT THEN
+                        END.POS=TOTAL.COUNT
+                        END.OF.DATA=1
+                    END
+                END ELSE
+                  END.POS=TOTAL.COUNT
+                  END.OF.DATA=1
+                END
+            END
+        REPEAT
+
+    END ELSE
+        LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+            EMPTY.FILE.LIST<2,POS> += 1
+        END ELSE
+            EMPTY.FILE.LIST<-1> = KEY
+            LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+                EMPTY.FILE.LIST<2,POS> += 1
+            END
+        END
+
+        IF EMPTY.FILE.LIST<2,POS> > 5 THEN
+            EMAIL.LIST = ''
+            CUSTOM.FROM = ''
+            CUSTOM.SUBJECT="Repeat Processing Detected"
+            CUSTOM.BODY = 'Attemping to process file':KEY
+            CUSTOM.BODY<-1> = 'Attempted processing: ':EMPTY.FILE.LIST<2,POS>:'times.'
+            
+            CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+        END
+        
+        GOTO NEXT.IN.LIST
+    END
+ 
+ DATA.DELETE:
+    
+    * HERE WE WRITE THE DATA FILE OUT TO A SUB FOLDER IN THE ORIGINAL DIRECTORY BEFORE WE DELETE THE FILE
+    * THIS IS PROBABLY JUST NEEDED FOR INTEGRATION TEST AND CAN BE COMMENTED OUT INCASE NEEDED FOR DEBUGGING IN THE FUTURE
+    
+        FIND.TAG = "OutboundOrder":AM:"InboundOrder"
+        TAG.DATA = ''
+        CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+
+        IF TAG.DATA<1> # '' AND TAG.DATA<1> # '0' THEN
+            TAG.DATA = FIND.TAG<1>:'-':TAG.DATA<1>
+        END ELSE
+            IF TAG.DATA<2> # '' AND TAG.DATA<2> # '0' THEN
+                TAG.DATA = FIND.TAG<2>:'-':TAG.DATA<2>
+            END ELSE
+                TAG.DATA = "NO TIED ORDER"
+            END
+        END
+
+        FILE.NAME=KEY
+        CONVERT ".xml" TO "" IN FILE.NAME
+        
+        IF MULTIPLE.UPDATES='1' THEN
+*            WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'+':'.xml'
+            WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:'+ InvStatChg.xml'
+        END ELSE
+*            WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'.xml'
+            WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:' InvStatChg.xml'
+        END
+
+    DELETE INV.STAT.CHANGE,KEY              ;       * DELETE FILE NOW THAT IT HAS BEE PROCESSED
+
+NEXT.IN.LIST:
+REPEAT
+
+          PRINT '*******************************'
+          PRINT '* TECSYS.INV.STAT.CHG.PHANTOM *'
+          PRINT '*******************************'
+          PRINT
+
+RETURN
+
+
+*SLEEP 3
+*GOTO SELECT.FILES
