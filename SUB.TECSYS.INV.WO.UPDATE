@@ -68,7 +68,7 @@ LOCATE "Item" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
             END
         END
 
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = ''
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT='NO ITEM FOUND WITHIN BOUNDS ON ORDER# ': TAG.DATA
         CUSTOM.BODY = ''
@@ -93,7 +93,7 @@ END ELSE
             END
         END
 
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = ''
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT='NO <Item> TAG FOUND IN ORDER ': TAG.DATA
         CUSTOM.BODY = ''
@@ -115,7 +115,7 @@ END ELSE
     READU INV.REC FROM F.INVENTORY,ITEM.ID:"*":BRANCH THEN    ;  * LOCK AND READ IN ORIGINAL ITEM DATA
         COST = INV.REC<7>
     END ELSE
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = ''
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT='UNABLE TO READ INVENTORY RECORD FILE FOR PART# ': ITEM.ID
         CUSTOM.BODY = ''

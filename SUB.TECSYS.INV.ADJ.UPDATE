@@ -69,7 +69,8 @@ LOCATE "Item" IN FILE.DATA<1>,START.MARKER SETTING POS THEN
             END
         END
 
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = 'inv-control@goblueteam.com'
+        EMAIL.LIST<-1> = 'support@goblueteam.com'
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT='NO ITEM FOUND WITHIN BOUNDS ON ORDER# ': TAG.DATA
         CUSTOM.BODY = ''
@@ -95,7 +96,8 @@ END ELSE
             END
         END
 
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = 'inv-control@goblueteam.com'
+        EMAIL.LIST<-1> = 'support@goblueteam.com'
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT='NO <Item> TAG FOUND IN ORDER ': TAG.DATA
         CUSTOM.BODY = ''
@@ -117,7 +119,8 @@ END ELSE
     READU INV.REC FROM F.INVENTORY,ITEM.ID:"*":BRANCH THEN    ;  * LOCK AND READ IN ORIGINAL ITEM DATA
         COST = INV.REC<7>
     END ELSE
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = 'inv-control@goblueteam.com'
+        EMAIL.LIST<-1> = 'support@goblueteam.com'
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT='UNABLE TO READ INVENTORY RECORD FILE FOR PART# ': ITEM.ID
         CUSTOM.BODY = ''
@@ -379,7 +382,8 @@ IF INV.REC<1> = ORIG.QTY THEN
     END
     
     IF NEG.QOH < "0" THEN
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = 'inv-control@goblueteam.com'
+        EMAIL.LIST<-1> = 'support@goblueteam.com'
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT='INVENTORY ADJUSTMENT NEG QOH ATTEMPT PART# ':ITEM.ID
         CUSTOM.BODY = 'MARK QOH: ':INV.REC<1>
@@ -396,7 +400,8 @@ IF INV.REC<1> = ORIG.QTY THEN
 END ELSE
 
     IF NEG.QOH < "0" THEN
-        EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+        EMAIL.LIST = 'inv-control@goblueteam.com'
+        EMAIL.LIST<-1> = 'support@goblueteam.com'
         CUSTOM.FROM = ''
         CUSTOM.SUBJECT="TECSYS/MARK INVENTORY DOESN'T MATCH AND NEG QTY ATTEMPTED ON # ":ITEM.ID
         CUSTOM.BODY = 'MARK QOH: ':INV.REC<1>
@@ -412,7 +417,8 @@ END ELSE
         RETURN
     END
     
-       EMAIL.LIST = 'inv-control@goblueteam.com,support@goblueteam.com'
+       EMAIL.LIST = 'inv-control@goblueteam.com'
+       EMAIL.LIST<-1> = 'support@goblueteam.com'
        CUSTOM.FROM = ''
         CUSTOM.SUBJECT="TECSYS/MARK INVENTORY DOESN'T MATCH AND NEG QTY ATTEMPTED ON # ":ITEM.ID
        CUSTOM.BODY = 'MARK QOH: ':INV.REC<1>
