@@ -1,0 +1,283 @@
+SUBROUTINE TECSYS.OUTBOUND.ORD.PICKED.PHANTOM
+*PROGRAM: TECSYS.OUTBOUND.ORD.PICKED.PHANTOM
+*********************************************************************
+* 10/27/20 - Updated - jemi
+* UPDATED 09/30/20 TO ADDRESS PICKED RESULTS
+* WMS AND PASS OFF PROCESSING THE APPRORIATE DATA LOADING APPLICATION
+* UPDATED 10/23/20 TO ADDRESS A NEW PICKED 'ORDER' RESULTS .XML FILE
+*********************************************************************
+CALL IQ.FILES
+COMMON FILES(200)
+
+*~* COMMENTING OUT RUNTIME OPTIONS 12/21/20 -JEMI *~*
+*    TCLREAD TCL.LINE
+*    OPTS=FIELD(TCL.LINE,'(',2)
+*    ONE.TIME=''
+*    IF INDEX(OPTS,'O',1) > 0 THEN ONE.TIME=1
+    
+AM = CHAR(254)
+VM = CHAR(253)
+SVM = CHAR(252)
+
+**////////////// NEW TAGS 10/20/20
+HEADER.TAG = "WmsOmFPickResultsTs"
+BR.NO=''           ; *   <Warehouse>BRANCH1</Warehouse>
+ORD.NUM=''         ; *   <Order>0916304143</Order>
+TYPE=''            ; *   <OrderType>XF</OrderType>
+USER.ID=''         ; *   <ModifiedBy>robp</ModifiedBy>
+STATUS =''         ; *   <OrderProcessStatus>4</OrderProcessStatus>   =  PICKED 
+SHIP.VIA=''        ; *   <CarrierService>CN</CarrierService> 
+    
+LINES.TAG = "WmsOdFPickResultsTs"
+PART=''           ;  *         <Item>IPND000289</Item>
+QTY.ORD=''        ;  *         <OriginalQuantity>2.000</OriginalQuantity>
+QTY.PICKED=''     ;  *         <CompletedQuantity>2.000</CompletedQuantity>
+CONTAINER=''      ;  *         <Container></Container>
+                 
+********************************
+* OPEN TECSYS WMS FOLDERS HERE *
+********************************
+
+OPEN "","pick_rsl_out" TO PICK.RESULT.OUT ELSE DEBUG
+OPEN "","pick_rsl_archive" TO WMS.FOLDER ELSE DEBUG  ; * THIS IS WHERE A COPY OF THE FILE GOES AFTER PROCESSING
+
+************************************************
+* GLOBAL VARIABLES                             *
+* THESE DO NOT GET RESET WHEN THE PHANTOM RUNS *
+************************************************
+
+LVL=2 ; * LVL IS THE NUMBER OF PREFIX LEVELS TO SKIP BEFORE PREPENDING TAGS IN THE XML FILE
+HEADER.TAG="WmsOmFPickResultsTs"
+EMPTY.FILE.LIST=''
+
+*************************************
+* THIS IS WHERE THE PHANTOM STARTS  *
+*************************************
+
+SELECT.FILES:
+
+*********************************************************
+* OVERALL FILE PROCESSING VARIABLES                     *
+* THESE RESET AFTER THE CURRENT FILE SELECT IS COMPLETE *
+*********************************************************
+
+SRO.KEYS=''         ;   * LIST OF CURRENT FILES IN THE SHIPPING RESULTS OUT DIRECTORY
+
+*******************************************************
+* TRANSFORMATION VARIABLES ARE USED IN EACH FILE LOOP *
+* THESE ARE RESET AT DIFFERENT POINTS AND REUSED      *
+*******************************************************
+
+CUR.FILE=''         ;   * CONTAINS THE RAW DATA FROM THE XML FILE
+XML.PARSE=''        ;   * CONTAINS THE RETURN DATA AFTER THE FILE HAS BEEN DESERIALIZED
+END.OF.FILES=0      ;   * USED FOR LOOPIPNG THROUGH LIST OF FILES
+DEBUG.FILE=''       ;   * USED TO WRITE RAW XML TO WMS FOLDER
+
+**************************************************
+* CHECK IF THERE ARE FILES IN ANY OF THE FOLDERS *
+**************************************************
+
+SELECT PICK.RESULT.OUT TO SRO.KEYS
+
+          PRINT '************ STARTING ****************'
+          PRINT '* TECSYS.OUTBOUND.ORD.PICKED.PHANTOM *'
+          PRINT '**************************************'
+          PRINT
+
+
+
+
+LOOP
+
+    READNEXT KEY FROM SRO.KEYS ELSE END.OF.FILES=1
+
+UNTIL END.OF.FILES DO
+    READ CUR.FILE FROM PICK.RESULT.OUT,KEY           ;       * READ DATA IN FROM THE FIRST FILE
+    DEBUG.FILE=CUR.FILE                              ;     * SAVE XML DATA BEFORE IT IS TRANSFERED. THIS IS USED FOR DEBUGGING AND NEEDS TO BE COMMENTED OUT UNLESS IN USE
+    CALL XML.PARSER.SUB(CUR.FILE,XML.PARSE,LVL)      ;       * NORMALIZE XML DATA
+    TOTAL.COUNT=DCOUNT(XML.PARSE<1>, CHAR(253))         ;       * USED TO DETERMINE TOTAL NUMBER OF POSITIONS IN THE FILE DATA
+*    WRITE XML.PARSE ON FILE.SAVE,KEY                 ;       * USED FOR TESTING TO WRITE NORMALIZED DATA TO TEMPORARY FILE
+
+****************************************************************
+* LOAD EACH ORDER BLOCK AND SEND TO ORDER TYPE LOADING PROGRAM *
+****************************************************************
+* VARIABLES TO BE RESET AFTER EACH FILE SHOULD GO HERE         *
+****************************************************************
+    START.POS=1
+    END.POS=TOTAL.COUNT
+    SINGLE.ORDER=0
+    MULTIPLE.ORDER=0
+    UPDATE.TYPE=''
+    END.OF.DATA=0
+
+    * IDENTIFY IF THE FILES HAS ONE UPDATE BLOCK OR MULTIPLE
+    LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS SETTING START.POS THEN
+        LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+            MULTIPLE.ORDER=1
+        END ELSE
+            * IF WE DON'T FIND A 2ND DATA BLOCK THEN IT IS A FILE WITH A SINGLE ORDER *
+            SINGLE.ORDER=1      ;   * SET SINGLE ORDER MARKER
+            END.OF.DATA=1
+        END
+
+***********************
+* LOCATE TYPE OF DATA *
+***********************
+        LOOP       
+
+                LOCATE "OrderType" IN XML.PARSE<1>,START.POS SETTING POS THEN                  
+                    IF END.OF.DATA # '1' THEN
+                            IF POS > START.POS AND POS < END.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>     ;   * MAKE SURE WE ARE USING DATA WITHIN THE ORDER BOUNDS
+                    END ELSE
+                            IF POS > START.POS THEN UPDATE.TYPE=XML.PARSE<3,POS>        ;   * IF WE ARE AT THE END OF AN ORDER FILE THERE WILL BE NO END.POS FOUND
+                    END             
+                END
+
+                * WHAT DO WE IF WE CAN'T FIND ANY UPDATE TYPE? DO WE ASSUME IT IS A SALES ORDER? OR DO WE TRY TO KEY OFF ANOTHER FIELD
+                * DO WE SEND AN EMAIL AND RETURN? -JEMI 06/23/20
+                * ADDED IN ERROR REPORTING TO SEND AN EMAIL IF NO ORDER TYPE IS FOUND - JASH
+                * IN THIS PROGRAM IT'LL BE EITHER SO OR XF
+
+            IF UPDATE.TYPE = '' THEN
+
+                FIND.TAG = "Order"
+                TAG.DATA = ''
+                CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+                IF TAG.DATA # '' AND TAG.DATA # '0' ELSE TAG.DATA = "NO ORDER NUMBER FOUND"
+
+                EMAIL.LIST = ''
+                CUSTOM.FROM = ''
+                CUSTOM.SUBJECT='ORDER TYPE MISSING: ':KEY
+                CUSTOM.BODY = 'TRYING TO UPDATE ORDER#: ': TAG.DATA
+                
+                CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+            END
+            
+******************************************************
+* CALL THE TYPE SPECIFIC PROGRAM TO PROCESS THE DATA *
+******************************************************
+            ADD = ""
+            IF UPDATE.TYPE="A001" OR UPDATE.TYPE="A002" OR UPDATE.TYPE="A003" OR UPDATE.TYPE="A004" OR UPDATE.TYPE="A005" OR UPDATE.TYPE="A006" THEN 
+               ADD = "Y"
+*               WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'.xml'
+               CALL SUB.TECSYS.ADD2ORD.PICKED.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+            
+            IF UPDATE.TYPE="SO" THEN
+                CALL SUB.TECSYS.WMS.ORD.PICKED.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+*~* NOT SURE WE NEED TO UPDATE PICKS ON XF'S YET?? 09/30/20 -JEMI
+*~* 10/20/20 MEETTING - SADA SAID YES
+
+*~* 10/28/20 - TEST XF's
+            
+            IF UPDATE.TYPE="XF" THEN
+                CALL SUB.TECSYS.XF.PICKED.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+
+*~* NOT SURE WE'RE GOING TO RECEIVE VENDOR RETURN PICKING RESULTS OR NOT?? -JEMI 09/30/20            
+*~* 10/20/20 - STILL UP IN THE AIR
+
+            IF UPDATE.TYPE="ORTV" THEN
+               CALL SUB.TECSYS.RGA.UPDATE(XML.PARSE,UPDATE.TYPE,START.POS,END.POS)
+            END
+            
+        UNTIL END.OF.DATA DO
+
+**************************
+* LOCATE NEXT DATA BLOCK *
+**************************
+            IF MULTIPLE.ORDER='1' THEN
+                START.POS=END.POS
+                LOCATE HEADER.TAG IN XML.PARSE<1>,START.POS+1 SETTING END.POS THEN
+                    IF END.POS >= TOTAL.COUNT THEN
+                        END.POS=TOTAL.COUNT
+                        END.OF.DATA=1
+                    END
+                END ELSE
+                  END.POS=TOTAL.COUNT
+                  END.OF.DATA=1
+                END
+            END
+        REPEAT
+
+    END ELSE    
+        * IF WE DON'T FIND ANY DATA BLOCK TAG WHAT DO WE DO WITH THE FILE? WE DO THAT HERE
+        
+        LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+            EMPTY.FILE.LIST<2,POS> += 1
+        END ELSE
+            EMPTY.FILE.LIST<-1> = KEY
+            LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+                EMPTY.FILE.LIST<2,POS> += 1
+            END
+        END
+
+        IF EMPTY.FILE.LIST<2,POS> > 5 THEN
+            EMAIL.LIST = ''
+            CUSTOM.FROM = ''
+            CUSTOM.SUBJECT="Repeat Processing Detected"
+            CUSTOM.BODY = 'Attemping to process file':KEY
+            CUSTOM.BODY<-1> = 'Attempted processing: ':EMPTY.FILE.LIST<2,POS>:'times.'
+            
+            CALL SUB.TECSYS.EMAIL.DATA(XML.PARSE,EMAIL.LIST,CUSTOM.FROM,CUSTOM.SUBJECT,CUSTOM.BODY,START.POS,END.POS)
+        END
+        
+        GOTO NEXT.IN.LIST
+    END
+
+    * HERE WE WRITE THE DATA FILE OUT TO A SUB FOLDER IN THE ORIGINAL DIRECTORY BEFORE WE DELETE THE FILE
+    * THIS IS PROBABLY JUST NEEDED FOR INTEGRATION TEST AND CAN BE COMMENTED OUT UNLESS NEEDED FOR DEBUGGING IN THE FUTURE
+
+    FIND.TAG = "Order"
+    TAG.DATA = ''
+    CALL SUB.TECSYS.LOC.TAG.DATA(XML.PARSE,FIND.TAG,TAG.DATA,START.POS,END.POS,KEY)
+
+    IF TAG.DATA # '' AND TAG.DATA # '0' THEN
+        TAG.DATA = TAG.DATA
+    END ELSE
+        TAG.DATA = "NO ORDER# FOUND"
+    END
+
+    FILE.NAME=KEY
+    CONVERT ".xml" TO "" IN FILE.NAME
+
+    IF MULTIPLE.ORDER='1' THEN
+*        WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'+':'.xml'       
+        WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:'-Picked_+.xml'  
+    END ELSE
+*        WRITE DEBUG.FILE ON WMS.FOLDER,FILE.NAME:'-':TAG.DATA:'.xml'
+        WRITE DEBUG.FILE ON WMS.FOLDER,TAG.DATA:'-Picked.xml'
+    END
+
+    DELETE PICK.RESULT.OUT,KEY              ;       * DELETE FILE NOW THAT IT HAS BEEN PROCESSED
+    
+IF DCOUNT(EMPTY.FILE.LIST<1>, CHAR(253)) > 0 THEN
+    LOCATE KEY IN EMPTY.FILE.LIST<1> SETTING POS THEN
+        EMPTY.FILE.LIST<POS> = 0
+        EMPTY.FILE.LIST<2,POS> = 0
+    END
+END ELSE
+    EMPTY.FILE.LIST = 0
+END
+
+NEXT.IN.LIST:
+
+REPEAT
+
+          PRINT '************ ENDING ******************'
+          PRINT '* TECSYS.OUTBOUND.ORD.PICKED.PHANTOM *'
+          PRINT '**************************************'
+          PRINT
+
+
+*IF ONE.TIME=1 THEN 
+*   SLEEP 2
+*   STOP
+*END
+
+999
+*SLEEP 2
+*GOTO SELECT.FILES
+RETURN
