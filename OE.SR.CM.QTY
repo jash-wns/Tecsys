@@ -1,0 +1,67 @@
+SUBROUTINE OE.SR.CM.QTY (TEMP.INV.REC,INV.NO)
+*********************************************************
+* FOR A 'REMAINDER' CREDIT MEMO FIND THE QUANTITIES THAT
+* HAVE NOT YET BEEN CREDITED ON OTHER CREDIT MEMOS
+* RELATED TO THE ORIGINAL INVOICE
+* CM-INDEX KEEPS THE ORDER/INVOICE# OF ANY INVOICE CREATED
+* BY REFERRING TO AN ORIGINAL INVOICE#, THE KEY IS THE
+* ORIGINAL INVOICE#
+* ATTRIBUTE 34 OF TEMP.INV.REC WILL HAVE THE QUANTITIES THAT
+* HAVE NOT YET BEEN USED UP
+******************************************************************
+*********************************************************
+COMMON FILES(200)
+OPEN "","CM-INDEX" TO CM.INDEX ELSE RETURN
+5 BASE.NO = FIELD(INV.NO,"-",1)
+  BO.NO = FIELD(INV.NO,"-",2)
+  INV.NO = FIELD(BASE.NO,"/",1)
+  IF BO.NO # "" THEN INV.NO = INV.NO:"-":BO.NO
+10 READ INDEX.REC FROM CM.INDEX,INV.NO ELSE RETURN ; * NOTHING TO CHECK
+20 READ INV.REC FROM FILES(11),INV.NO ELSE RETURN ; * NO INV TO REVERSE
+30 TEMP.INV.REC = INV.REC
+40 FOR I = 1 TO DCOUNT(INDEX.REC<1>,CHAR(253)) ; * FOR EACH RELATED CM
+       THIS.CM = INDEX.REC<1,I>
+       READ CM.REC FROM FILES(11),THIS.CM THEN
+            ATTR = 34
+            GOTO 100 ; * SUBTRACT QUANTITIES FROM TEMP.INV.REC
+       END
+       READ CM.REC FROM FILES(26),THIS.CM THEN
+            ATTR = 34 ; GOTO 100 ; * SUBTRACT QUANTITIES
+       END
+       READ CM.REC FROM FILES(13),THIS.CM THEN
+            ATTR = 5 ; GOTO 100 ; * SUBTRACT QUANTITIES
+       END
+50 NEXT I
+   RETURN ; * RETURN TO OE.SR.CM.LINE.REV
+************************************************************************
+100 FOR J = 1 TO DCOUNT(CM.REC<2>,CHAR(253)) ; * FOR EACH PRODUCT
+        IF CM.REC<131,J> # INV.NO THEN GOTO 120
+        PROD.NO = CM.REC<2,J> ; QTY = CM.REC<ATTR,J>
+        NO.TIMES = COUNT(TEMP.INV.REC<2>,PROD.NO) ; * SAME PRODUCT
+        FOR K = 1 TO NO.TIMES
+*           LOCATE(PROD.NO,TEMP.INV.REC<2>,K;JJJ) THEN
+            JJJ = 0
+            GOSUB 700 ; * FIND THE VALUE WHERE THIS PRODUCT IS
+            IF JJJ # 0 THEN
+               TEMP.INV.REC<34,JJJ> = TEMP.INV.REC<34,JJJ> + QTY
+               IF TEMP.INV.REC<34,JJJ> LT 0 THEN
+                   QTY = TEMP.INV.REC<34,JJJ>
+                   TEMP.INV.REC<34,JJJ> = 0
+                   GOTO 110 ; * NEXT K
+               END ELSE
+                  GOTO 120 ; * NEXT PRODUCT
+              END
+            END
+110     NEXT K
+120  NEXT J
+     GOTO 50 ; * NEXT RELATED CREDIT MEMO
+********************************************************
+700 CNT = 0
+    FOR KK = 1 TO DCOUNT(TEMP.INV.REC<2>,CHAR(253))
+        IF TEMP.INV.REC<2,KK> = PROD.NO THEN
+           CNT = CNT + 1
+           IF CNT = K THEN JJJ = KK ; RETURN
+        END
+    NEXT KK
+    RETURN
+END

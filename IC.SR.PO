@@ -1,0 +1,1371 @@
+SUBROUTINE IC.SR.PO (SOURCE)
+************************************************************************
+**                   WESTERN NEVADA SUPPLY COMPANY                    **
+*0*Header Stamp Rev 1.1                                               **
+**      Subroutine: IC.SR.PO                                          **
+**      Conversion Date: 03/04/96  By: Erlach, Tim                    **
+**                                                                    **
+*1*  Last file date: 10/22/08  By: DADR - Driscoll, Dan               * *
+*2*    Compile date: 10/22/08  By: DADR - Driscoll, Dan               * *
+*3*  Last file time: 07:03:20  Port: 316   Account: MIS               * *
+*4*    Compile time: 07:03:20  Port: 316   Account: MIS               * *
+*5*   Object frames:        8  PICK rev: 7.5.1.M5.A14.D14.F3          * *
+*6*    Object bytes:   22,976  Flash frames: 0                        * *
+*~*  UPDATED 06/17/19 TO ADDRESS INACTIVE VENDORS                     * *
+*************************************************************************
+    COMMON FILES(200)
+    OPEN '','DELETED-POS' TO DELETED.POS
+    PROMPT CHAR(0)
+
+    CALL PASSCHECK ('IC.7.12' , BADPASS); IF BADPASS THEN RETURN
+    DDADD="* List our PO# as the reference on all shipping labels and freight bills!! *"
+    TEST.REC = '' ; TEST1.REC = ''; SVCHECK="N"; SVCODE=""; SO.NO=""
+    IF FILES(96)<9> = 'N' THEN RETURN
+*===========================
+* INITAL VALUES
+*===========================
+    CALL DECOMPRESS
+    USER.ID = FILES(95)
+    CHANNEL.NO = FILES(196)
+    READ PROMPT.REC FROM FILES(3),"OE" ELSE PROMPT.REC = ""
+    READ INSTALL.REC FROM FILES(3),"IC" ELSE INSTALL.REC = ""
+    PORT.REC = FILES(197)
+    PMODE = PORT.REC<1>
+    PTR.NO = PORT.REC<12>
+    COST.SUPPRESS = PORT.REC<9>
+    READ XREF.USAGE FROM FILES(3),"IC.XREF.USAGE" ELSE XREF.USAGE = ""
+    READ P.R FROM FILES(3),"IC.PUR" ELSE P.R = ""
+    IF P.R<1> = "Y" THEN DCOL = 8 ELSE DCOL = 4
+    RTN.CD = ""
+    RTN.ST = ""
+    COST.ENTRY.TYPE = INSTALL.REC<8>
+    IF FILES(99) # '' THEN
+       PO.NO = FILES(99)
+       READ REC FROM FILES(14),PO.NO ELSE REC = FILES(100)
+       IF REC # '' THEN
+          WHSE.NO = REC<1> ; DC = REC<1>
+          GOSUB 900
+          GOTO 150
+       END
+       PO.NO = ''
+    END
+*===========================
+* ASK FOR BRANCH#
+*===========================
+    READ BRANCH.NOS FROM FILES(3),"BRANCH.NOS" ELSE BRANCH.NOS = "1"
+    IF BRANCH.NOS<2> = "" THEN DC = BRANCH.NOS<1> ELSE DC = ""
+    IF DC = "" AND PORT.REC<10> = "Y" THEN DC = PORT.REC<2>
+    IF DC = '' THEN
+10     PRINT @(-1)
+       PRINT @(25,10):"ENTER WAREHOUSE CODE ":
+       INPUT DC
+       IF DC = "" OR DC = "END" THEN RETURN
+    END
+11  READ S.A FROM FILES(2),DC ELSE GOTO 10
+    IF DC=51 THEN GOTO 10
+    WHSE.NO = DC
+*===========================
+100* DISPLAY SCREEN
+*===========================
+   IF FILES(99) # '' THEN RETURN
+    GOSUB 900 ;* PRINT 1ST SCREEN FORMAT
+*===========================
+* CHECK FOR PO REC
+*===========================
+    IF FILES(100) # "" THEN
+       REC = FILES(100)
+       CALL IC.SR.PO.WEIGHT.CALC(4,'',P.R,REC,PROMPT.REC)
+       DC = REC<1>
+       WHSE.NO = REC<1>
+       ORG.REC = "" ; REC.TYPE = "NEW" ; ENTRY.MODE = "E" ; PO.NO = ""
+       LINE = ''
+       OLD.VNO = ""
+       READ V.REC FROM FILES(33),REC<12> ELSE V.REC = ""
+       WORK.ATTR = "" ; GOSUB 910
+       PRINT @(21,2): ; INPUT PO.NO
+       PO.NO = TRIM(PO.NO)
+       IF PO.NO = "END" THEN RETURN
+       IF PO.NO = "" THEN GOTO 210
+       READ XX FROM FILES(14),PO.NO ELSE XX = ""
+       IF XX = "" THEN
+          READ XX FROM FILES(24),PO.NO ELSE XX = ""
+       END
+       IF XX # "" THEN
+          PRINT @(0,23):"THIS PURCHASE ORDER NUMBER IS ALREADY USED ":
+          INPUT ANS:
+          PRINT @(0,23):@(-4):
+          GOTO 100
+       END
+       GOTO 210
+    END
+    REC = "" ; LINE = ""
+*** 
+* ASK FOR PO# 
+*** 
+101 PRINT @(21,2): ; INPUT PO.NO,15
+    IF PO.NO = "END" THEN RETURN
+    IF PO.NO='RECOVER' THEN
+       CALL IQ.LAST.ACTION (2,'PO',PO.NO,REC,'','','')
+       PRINT @(21,2):SPACE(15)
+       IF PO.NO='' THEN GOTO 101
+       READ ORG.REC FROM FILES(14),PO.NO THEN
+          REC.TYPE='OLD' ; ENTRY.MODE='C'
+       END ELSE
+          ORG.REC=''
+          REC.TYPE='NEW' ; ENTRY.MODE='C'
+       END
+       WHSE.NO=REC<1>
+       GOTO 155
+    END
+
+    *-* ADDED INPUT CORRECTION: PEMO 06/22/96
+    PO.NO = TRIM( PO.NO )
+    CONVERT " " TO "_" IN PO.NO
+    PO.NO = OCONV( PO.NO, "MCP" )
+    PRINT @(21,2):PO.NO'L#15'
+
+    IF SOURCE = 5 THEN
+       READ REC FROM FILES(24),PO.NO ELSE GOTO 100
+       ZZ = 1
+       LOOP UNTIL REC<2,ZZ> = "" DO
+          REC<5,ZZ> = REC<19,ZZ>
+          ZZ = ZZ + 1
+       REPEAT
+       GOTO 150
+    END
+    READ XX.REC FROM FILES(30),PO.NO ELSE XX.REC = ""
+    IF XX.REC # "" THEN
+       PRINT @(0,22):@(-4):"PO IS IN RECEIVER PROCESS NO CHANGE ALLOWED " : ; INPUT XX.ANS
+        GOTO 100
+    END
+
+    LOC = INDEX(PO.NO,'-',1)
+    IF LOC # 0 THEN
+       BON = TRIM(PO.NO[LOC+1,99])
+       IF BON MATCHES '0N' THEN NULL ELSE
+          PRINT @(0,23):'INVALID BACK ORDER NUMBER ':CHAR(7):
+          INPUT ANS,2: ; PRINT @(0,23):@(-4):
+          PRINT @(21,2):SPACE(15)
+          GOTO 101
+       END
+    END
+
+    IF PO.NO = "" THEN
+       CALL IC.SR.PO.NO ( SOURCE , P.R , WHSE.NO , PO.NO )
+       PRINT @(21,2):PO.NO
+       GOTO 200 ; * NEW PO
+    END
+    *****BRRO INSERT HERE FOR RGA LOGIC
+    IF PO.NO = "R" THEN
+       PO.NO = ""
+       CALL IC.SR.PO.NO ( SOURCE , P.R , WHSE.NO , PO.NO )
+       PRINT @(21,2):"RGA":PO.NO
+       PO.NO = "RGA":PO.NO
+       GOTO 200 ; * NEW PO
+    END
+    ORG.NO = PO.NO ; SUFX = FIELD(PO.NO,"-",2)
+    IF REC # "" THEN
+       READ X FROM FILES(14),PO.NO ELSE GOTO 1033
+1031   PRINT @(0,23):"THIS PURCHASE NUMBER IS ALREADY USED ":
+       INPUT ANS:
+       PRINT @(0,23):@(-4):
+       PRINT @(2,21):SPACE(15):
+       GOTO 101
+1033   READ X FROM FILES(24),PO.NO ELSE GOTO 200
+       GOTO 1031
+    END
+102 READ REC FROM FILES(14),PO.NO ELSE
+       SUFX = SUFX + 1
+       IF SUFX > 9 THEN PO.NO = ORG.NO ; GOTO 104
+       PO.NO = FIELD(PO.NO,"-",1):"-":SUFX
+       GOTO 102
+104    READ X FROM FILES(24),PO.NO THEN
+          PRINT @(0,23):"THIS PURCHASE NUMBER IS ALREADY USED ":
+          INPUT ANS:
+          PRINT @(0,23):@(-4):@(21,2):SPACE(15):
+          GOTO 101
+       END ELSE
+*-* ADD CHECK FOR DELETED PO.
+          READ X FROM FILES(140),PO.NO:"*PO" THEN
+             DUMMY.POS = 0
+             DUMMY.CNT = DCOUNT( X, CHAR(253) )
+             FOR XY = DUMMY.CNT TO 1 STEP -1
+                 IF X<1,XY> = 'D' THEN
+                     DUMMY.POS = XY
+                     XY = 0
+                 END
+             NEXT XY
+             IF DUMMY.POS # 0 THEN
+                 PRINT @(0,23):@(-4):"PO DELETED BY: ":X<2,DUMMY.POS,3>:
+                 PRINT " ON ":OCONV( X<2,DUMMY.POS,2>, 'D2/' ):
+             END ELSE
+                 PRINT @(0,23):"THIS PURCHASE ORDER HAS BEEN DELETED. ":
+             END
+             INPUT ANS:
+             PRINT @(0,23):@(-4):@(21,2):SPACE(15):
+             GOTO 101
+          END
+       END
+       PRINT @(0,23):"IS THIS A NEW PURCHASE ORDER (Y=YES) ":CHAR(7):
+       INPUT ANS:
+       PRINT @(0,23):@(-4):
+       IF ANS # "Y" THEN GOTO 100
+       GOTO 200 ;* NEW PO ENTRY
+    END
+*** 
+* P/O ALREADY EXIST 
+*** 
+150 ORG.REC = REC ; REC.TYPE = "OLD" ; ENTRY.MODE = "C"
+155 TEST.REC = ORG.REC
+    WORK.ATTR = REC<5>
+    GOSUB 910 ;* PRINT 1ST SCREEN CONTENT
+    IF REC<1> # WHSE.NO THEN
+       PRINT @(0,23):"THIS PURCHASE ORDER BELONGS TO WHSE# (":REC<1>:")  ":
+       INPUT ANS:
+       GOTO 100
+    END
+    GOTO 300 ;* SELECTIONS
+*** 
+* NEW PO 
+*** 
+200 ORG.REC = "" ; REC.TYPE = "NEW" ; WORK.ATTR = "" ; ENTRY.MODE = "E"
+    REC<1> = DC
+    OLD.VNO = ""
+*** 
+* PO TYPE 
+*** 
+210 IF ENTRY.MODE = 'E' OR LINE = 2 THEN
+       PRINT @(0,23):"P=REGULAR PO    D= DIRECT SHIPMENT  NR=TRANSFER INTERCOMPANY ":
+       PRINT @(61,2): ; INPUT PO.TYPE,5:
+       PRINT @(0,23):@(-4):
+       IF PO.TYPE = 'TOP' THEN GOTO 100
+       IF PO.TYPE = 'END' THEN RETURN
+**JEMI** ADDED 7/9/19 ***       
+       IF PO.TYPE = '' THEN PO.TYPE = REC<18>
+       IF PO.TYPE = '' THEN PO.TYPE = 'P'
+       IF PO.TYPE = "P" OR PO.TYPE = "D" OR PO.TYPE = "TR" THEN NULL ELSE GOTO 210
+       IF REC<93> # '' THEN
+          X.LOOP = DCOUNT(REC<93>,CHAR(253))
+          FOR X = 1 TO X.LOOP
+             SO.TYPE = ''
+             ORD.NO = REC<93,X>
+             READV SO.TYPE FROM FILES(13),ORD.NO,18 ELSE
+                READV SO.TYPE FROM FILES(11),ORD.NO,18
+             END
+             IF SO.TYPE = 'R' THEN SO.TYPE = 'P'
+             IF SO.TYPE # PO.TYPE THEN
+                PRINT @(0,23):@(-4):"WARNING!  PO TYPE DOES NOT MATCH ORDER TYPE IN ORDER ":ORD.NO:".":CHAR(7):
+                INPUT ANS:
+                PRINT @(0,23):@(-4):
+             END
+          NEXT X
+       END
+       REC<18> = PO.TYPE
+       PRINT @(61,2):PO.TYPE'L#5'
+*      GOSUB 890 ; * DISPLAY SHIPPING
+    END
+*** 
+* VENDOR NO. (REP) 
+*** 
+215 IF ENTRY.MODE = 'E' OR LINE = 3 THEN
+       PRINT @(21,3): ; INPUT VEND.REP.NO
+       IF VEND.REP.NO = "TOP" THEN GOTO 100
+       IF VEND.REP.NO = 'END' THEN RETURN
+       IF VEND.REP.NO = '' THEN VEND.REP.NO = REC<12>
+       IF VEND.REP.NO = "?" AND FILES(96)<3> = "Y" THEN
+          CALL IQ.AP.VENDOR ( VEND.REP.NO , VEND.REC )
+          GOSUB 900 ; GOSUB 910
+          IF VEND.REP.NO = "" THEN GOTO 215
+       END
+       IF VEND.REP.NO='`' OR VEND.REP.NO='?S' THEN
+          CALL KS.XREF.INQUIRY.VEND (VEND.REP.NO,'')
+          GOSUB 900 ; GOSUB 910
+          IF VEND.REP.NO='' THEN GOTO 215
+       END
+218    READ VEND.REC FROM FILES(33),VEND.REP.NO ELSE
+          READ XREF.REC FROM FILES(34),FIELD(VEND.REP.NO," ",1) ELSE
+             WRD = FIELD(VEND.REP.NO," ",1)
+             CALL AR.SR.SOUNDEX ( WRD , NWRD )
+             READ XREF.REC FROM FILES(34),NWRD ELSE
+                PRINT @(21,3):SPACE(15)
+                GOTO 215
+             END
+             VEND.REP.NO = NWRD
+          END
+          IF XREF.REC<2> = "" THEN VEND.REP.NO = XREF.REC<1> ; PRINT @(21,3):VEND.REP.NO: ; GOTO 218
+          CALL AP.SR.VEND.XREF.DISPLAY ( VEND.REP.NO , SC )
+          REC<12> = VEND.REP.NO
+          GOSUB 900
+          GOSUB 910
+          GOTO 218
+       END
+       PRINT @(21,3):VEND.REP.NO'L#15'
+       REC<12> = VEND.REP.NO
+       IF P.R<25> = "Y" THEN
+          READV COOP.PERC FROM FILES(33),REC<12>,89 ELSE COOP.PERC = ""
+          REC<77> = COOP.PERC
+          PRINT @(61,19):OCONV(COOP.PERC,"MD2")"R#7"
+       END
+       IF VEND.REC<31,1> # '' AND VEND.REC<32> # '' THEN REC<21> = '3' ELSE REC<21> = '1'
+       CALL IC.SR.PO.ADDR ( VEND.REC , REC , ADDR )
+       FOR XX = 1 TO 4
+          PRINT @(4,3+XX):ADDR<1,XX>'L#35'
+       NEXT XX
+************ 
+* IF VENDOR SELECTED IS AN INACTIVE VENDOR <175> DO NOT ALLOW THE SELECTION - JEMI 06/17/19 *
+************
+      IF VEND.REC<175> = "Y" THEN 
+         PRINT @(0,23):@(-4):@(-13):"WARNING! YOU HAVE SELECTED AN INACTIVE VENDOR - CONTACT ACCTG TO MAKE ACTIVE ":CHAR(7):@(-14):
+         INPUT ANS:
+         PRINT @(0,23):@(-4):
+         PRINT @(21,3):SPACE(15)   
+            GOTO 215
+         END
+*******  
+       PRINT @(0,23):"DO YOU WANT VENDOR ADDRESS(ES) REVIEW (Y=YES), OR (R=RESTART) ":
+       INPUT ANS:
+       PRINT @(0,23):@(-4):
+       IF ANS = "R" THEN
+          FOR JJ = 4 TO 7
+             PRINT @(0,JJ):SPACE(39):
+          NEXT JJ
+          PRINT @(21,3):SPACE(15):
+          GOTO 215
+       END
+       IF ANS = "Y" THEN
+          V.NUM = REC<12>
+          CALL AP.SR.VEND.REC.REVIEW ( VEND.REC , V.NUM , REC )
+          GOSUB 900 ; GOSUB 910
+       END
+    END
+***
+* CHECK IF VENDOR HAS PAYTO#
+***
+    IF VEND.REC<78> # "" THEN
+       VEND.PAY.NO = VEND.REC<78>
+       READ VEND.PAY.REC FROM FILES(33),VEND.PAY.NO ELSE VEND.PAY.NO = "" ; GOTO 220
+       PRINT @(61,12):VEND.PAY.NO'L#15'
+       REC<62> = VEND.PAY.NO
+       X = REC<21> ; REC<21> = 1
+       CALL IC.SR.PO.ADDR(VEND.PAY.REC,REC,ADDR)
+       REC<21> = X
+       FOR XX = 1 TO 4
+          PRINT @(44,12+XX):ADDR<1,XX>'L#35'
+       NEXT XX
+    END
+*** 
+* CUSTOMER NO. 
+*** 
+220 IF ENTRY.MODE = 'E' OR LINE = 4 THEN
+       IF REC<18> = 'D' THEN
+          PRINT @(0,23):'FOR DIRECT SHIPMENT. PLEASE ENTER CUSTOMER NUMBER ':CHAR(7):
+       END
+       PRINT @(61,3): ; INPUT CUST.NO
+       PRINT @(0,23):@(-4):
+       IF CUST.NO = "TOP" THEN GOTO 100
+       IF CUST.NO = 'END' THEN RETURN
+       IF CUST.NO = '' THEN CUST.NO = REC<14>
+       IF CUST.NO = '' AND REC<18> = 'D' THEN GOTO 220
+       IF CUST.NO = '' THEN GOTO 224
+222    READ CUST.REC FROM FILES(4),CUST.NO ELSE
+          READ XREF.REC FROM FILES(8),FIELD(CUST.NO," ",1) ELSE
+             WORD = FIELD(CUST.NO," ",1)
+             CALL AR.SR.SOUNDEX ( WORD , NEW.WORD )
+             READ XREF.REC FROM FILES(8),NEW.WORD ELSE GOTO 220
+             CUST.NO = NEW.WORD
+          END
+          IF XREF.REC<2> = "" THEN CUST.NO = XREF.REC<1> ; PRINT @(61,3):CUST.NO "L#10" ; GOTO 222
+          CALL AR.SR.CUST.XREF.DISPLAY  ( CUST.NO , SC )
+          GOSUB 900 ; GOSUB 910
+          PRINT @(61,3):CUST.NO'L#10'
+          GOTO 222
+       END
+224    REC<14> = CUST.NO
+       GOSUB 890 ; * DISPLAY SHIPPING
+*** 
+* SHIPPING ADDRESS 
+*** 
+       FOR I = 1 TO 4
+          PRINT @(44,3+I): ; INPUT SHP.ADD,35:
+          IF SHP.ADD = '' THEN SHP.ADD = REC<15,I>
+          PRINT @(44,3+I):SHP.ADD'L#35'
+          REC<15,I> = SHP.ADD
+       NEXT I
+    END
+*** 
+* PRICING VENDOR 
+*** 
+225 IF ENTRY.MODE = 'E' OR LINE = 5 THEN
+       IF REC.TYPE = "NEW" OR SOURCE = 5 OR SOURCE = 1 THEN
+          PRINT @(21,8): ; INPUT VEND.PRICE.NO
+          IF VEND.PRICE.NO = "TOP" THEN GOTO 100
+          IF VEND.PRICE.NO = 'END' THEN RETURN
+          IF VEND.PRICE.NO = '' THEN VEND.PRICE.NO = REC<60>
+          IF VEND.PRICE.NO = '' THEN VEND.PRICE.NO = REC<12>
+227       READ VEND.REC FROM FILES(33),VEND.PRICE.NO ELSE
+             READ XREF.REC FROM FILES(34),FIELD(VEND.PRICE.NO," ",1) ELSE
+                WRD = FIELD(VEND.PRICE.NO," ",1)
+                CALL AR.SR.SOUNDEX ( WRD , NWRD )
+                READ XREF.REC FROM FILES(34),NWRD ELSE
+                   PRINT @(21,8):SPACE(15)
+                   GOTO 225
+                END
+                VEND.PRICE.NO = NWRD
+             END
+             IF XREF.REC<2> = "" THEN VEND.PRICE.NO = XREF.REC<1> ; PRINT @(21,8):VEND.PRICE.NO: ; GOTO 227
+             CALL AP.SR.VEND.XREF.DISPLAY ( VEND.PRICE.NO , SC )
+             GOSUB 900
+             GOSUB 910
+             IF VEND.PRICE.NO = '' THEN GOTO 225
+             REC<60> = VEND.PRICE.NO
+             GOTO 227
+          END
+          PRINT @(21,8):VEND.PRICE.NO:SPACE(2):VEND.REC<1>
+          REC<60> = VEND.PRICE.NO
+
+          *-* THIS CHANGE WAS INCLUDED TO RECONFIGURE COST
+          * ON ORDERS CREATED FROM A SALESORDERS. 
+          * PEMO: 05/21/96
+          IF OLD.VNO = "" AND DCOUNT( REC<2>, CHAR(253) ) # 0 THEN
+              OLD.VNO = VEND.PRICE.NO
+          END                        
+
+          IF OLD.VNO # "" THEN
+             PRINT @(0,23):"DO YOU WANT TO RECONFIGURE THE COST (Y=YES)  ":
+             INPUT ANS:
+             PRINT @(0,23):@(-4):
+             IF ANS = "Y" THEN CALL IC.SR.PO.COST.EVALUATE ( REC , VEND.PRICE.NO , P.R )
+          END
+          OLD.VNO = VEND.PRICE.NO
+       END
+    END
+*** 
+* VENDOR TERMS 
+*** 
+230 IF ENTRY.MODE = 'E' OR LINE = 6 THEN
+       VT = REC<17>
+       IF VT = '' THEN
+          READV VT FROM FILES(33),REC<60>,8 ELSE VT = ''
+       END
+       PRINT @(21,9):VT
+       PRINT @(21,9): ; INPUT VEND.TERM
+       IF VEND.TERM = "TOP" THEN GOTO 100
+       IF VEND.TERM = 'END' THEN RETURN
+       IF VEND.TERM = '' THEN VEND.TERM = REC<17>
+       IF VEND.TERM = "" THEN VEND.TERM = VT
+       REC<17> = VEND.TERM
+       PRINT @(21,9):VEND.TERM'L#15'
+    END
+*** 
+* SALES ORDER# 
+*** 
+235 IF ENTRY.MODE = 'E' OR LINE = 7 THEN
+       IF.NO=""
+       IF REC<23> # "" THEN
+          PRINT @(0,23):@(-4):"ENTER ONE SPACE TO DELETE AN ORDER# ":
+          SO.NO = REC<23>
+       END
+***IF DIRECT - THEN SALES ORDER # REQUIRED   
+       IF P.R<11> = 'Y' AND REC<18> = 'D' THEN
+          PRINT @(0,23):'FOR DIRECT SHIPMENT - PLEASE ENTER SALES ORDER NUMBER ':CHAR(7):
+       END
+       PRINT @(21,10): ; INPUT IF.NO
+       PRINT @(0,23):@(-4):
+       IF IF.NO = ' ' THEN SO.NO = ""; REC<23> = ""
+       IF IF.NO # " " AND IF.NO # "" THEN SO.NO = IF.NO; REC<23> = SO.NO
+
+***NEED TO ADD SOMETHING HERE 7/9/19***
+
+ *      IF SO.NO = "DEBIT MEMO" AND FILES(96)<204> = "CR" THEN GOTO 236
+       IF SO.NO # "" THEN
+*      IF SO.NO # "" AND SO.NO # "DEBIT MEMO" THEN
+          READ TEMP.OREC FROM FILES(13),SO.NO ELSE
+             READ TEMP.STREC FROM FILES(77),SO.NO ELSE
+                PRINT @(0,23):@(-4):"NOT A VALID SALES ORDER OR STOCK TRANSFER.":CHAR(7):
+                GOTO 235
+             END
+          END
+       END
+236    IF SO.NO = 'TOP' THEN GOTO 100
+       IF SO.NO = 'END' THEN RETURN
+       IF SO.NO = '' THEN SO.NO = REC<23>
+       IF P.R<11> = 'Y' AND SO.NO = '' THEN
+          IF REC<18> = 'D' THEN
+             GOTO 235
+          END
+       END
+       REC<23> = SO.NO
+       PRINT @(21,10):SO.NO'L#15'
+    END
+*** 
+* PO DATE 
+*** 
+240 IF ENTRY.MODE = 'E' OR LINE = 8 THEN
+       PRINT @(21,11): ; INPUT PO.DATE
+       IF PO.DATE = "TOP" THEN GOTO 100
+       IF PO.DATE = 'END' THEN RETURN
+       IF PO.DATE = '' THEN PO.DATE = OCONV(REC<9>,'D2/')
+       CALL IQ.SR.DATE.CHECK ( PO.DATE )
+       IF PO.DATE < 1 THEN GOTO 240
+       PRINT @(21,11):OCONV(PO.DATE,"D2/")
+       REC<9> = PO.DATE
+    END
+*** 
+* REQ DATE 
+*** 
+245 IF ENTRY.MODE = 'E' OR LINE = 9 THEN
+       PRINT @(21,12): ; INPUT REQ.DATE
+       IF REQ.DATE = "TOP" THEN GOTO 100
+       IF REQ.DATE = 'END' THEN RETURN
+       IF REQ.DATE = '' THEN REQ.DATE = OCONV(REC<10>,'D2/')
+       CALL IQ.SR.DATE.CHECK ( REQ.DATE )
+       IF REQ.DATE < 1 THEN GOTO 245
+       PRINT @(21,12):OCONV(REQ.DATE,"D2/")
+       REC<10> = REQ.DATE
+       GOTO 255
+    END
+*** 
+* SHIP DATE 
+*** 
+250 IF ENTRY.MODE = 'E' OR LINE = 10 THEN
+       PRINT @(21,13): ; INPUT SHIP.DATE
+       IF SHIP.DATE = "TOP" THEN GOTO 100
+       IF SHIP.DATE = 'END' THEN RETURN
+       IF SHIP.DATE = '' THEN SHIP.DATE = OCONV(REC<11>,'D2/')
+       CALL IQ.SR.DATE.CHECK ( SHIP.DATE )
+       IF SHIP.DATE < 1 THEN GOTO 250
+       PRINT @(21,13):OCONV(SHIP.DATE,"D2/")
+       REC<11> = SHIP.DATE
+    END
+*** 
+* SHIP VIA 
+*** 
+255 IF ENTRY.MODE = 'E' OR LINE = 11 THEN
+       PRINT @(21,14): ; INPUT SHIPVIA
+       IF SHIPVIA = "TOP" THEN GOTO 100
+       IF SHIPVIA = 'END' THEN RETURN
+       IF SHIPVIA = "?" THEN
+          FILE.NAME = "SHIPVIA-CODES"
+          DR = ""
+          DR<1> = "CODE" ; DR<2> = "DESC"
+          SHIPVIA = ""
+          CALL MAINTAIN.INQUIRY ( "D" , FILE.NAME , SHIPVIA , DR )
+          GOSUB 900 ; GOSUB 910
+       END
+       SVCODE = SHIPVIA
+       REC<114> = SVCODE
+*257    READV SDESC FROM FILES(27),SHIPVIA,1 ELSE SDESC = SHIPVIA    * 06/16/20 JEMI - FORCED TO ENTER A VALID SHIPVIA
+257    READV SDESC FROM FILES(27),SHIPVIA,1 ELSE GOTO 255
+       SHIPVIA = SDESC
+       IF SHIPVIA = '' OR SHIPVIA = ' ' THEN GOTO 255
+       REC<13> = SHIPVIA
+       PRINT @(21,14):SHIPVIA'L#15'
+       IF REC<90> = "" THEN
+         IF SHIPVIA = "WILL CALL" THEN 
+           IF VEND.REC<116> # "" THEN
+             REC<16,-1> = "Pick up address:"
+             REC<16,-1> = VEND.REC<116,1>
+             IF VEND.REC<116,2> # "" THEN REC<16,-1> = VEND.REC<116,2>
+             REC<16,-1> = VEND.REC<116,3>:", ":VEND.REC<116,4>
+             REC<16,-1> = VEND.REC<116,5>
+             REC<16,-1> = VEND.REC<116,6> ; * comments field added 8/7/19 * jemi
+             REC<90> = "Y"
+           END
+         END
+       END
+       IF SVCODE[1,2] = "UP" OR SVCODE[1,2] = "FE" OR SVCODE[1,2] = "FX" THEN
+         IF PO.TYPE # "D" THEN
+           CRT @(0,22):"THIS SHOULD BE COLLECT OR 3RD PARTY ": ;  * changed from ,23 to ,22 7/9/19 -jemi *
+           INPUT PAUSE:
+         END
+       END
+    END
+*** 
+* FOB 
+*** 
+260 IF ENTRY.MODE = 'E' OR LINE = 12 THEN
+       PRINT @(21,15): ; INPUT FOB
+       IF FOB = "TOP" THEN GOTO 100
+       IF FOB = 'END' THEN RETURN
+       IF FOB = '' THEN FOB = REC<24>
+       REC<24> = FOB
+       PRINT @(21,15):FOB'L#15'
+    END
+*** 
+* FRT CODE 
+*** 
+265 IF ENTRY.MODE = 'E' OR LINE = 13 THEN
+*       PRINT @(0,23):"ENTER (1=PREPAID & ADD,   2=COLLECT,   3=FULL FREIGHT ALLOWED) : ":
+       PRINT @(0,23):"ENTER (1=PREPAID & ADD, 2=COLLECT, 3=FULL FREIGHT ALLOWED, 4=3RD PARTY) : ":
+       PRINT @(21,16): ; INPUT FRT.CODE
+       PRINT @(0,22):@(-4):   ;  * added 07/09/19
+       PRINT @(0,23):@(-4):
+       IF FRT.CODE = 'TOP' THEN GOTO 100
+       IF FRT.CODE = 'END' THEN RETURN
+       IF FRT.CODE = '' THEN FRT.CODE = REC<32>
+       IF FRT.CODE MATCHES '1N' AND FRT.CODE > 0 AND FRT.CODE < 6 THEN NULL ELSE GOTO 265
+       DESC = ''
+       IF FRT.CODE = 1 THEN DESC = 'PREPAID & ADD'
+       IF FRT.CODE = 2 THEN DESC = 'COLLECT'
+       IF FRT.CODE = 3 THEN DESC = 'FULL FREIGHT ALLOWED'
+       PRINT @(21,16):FRT.CODE:SPACE(1):DESC 'L#12'
+*      REC<32> = FRT.CODE
+       IF FRT.CODE = 1 THEN 
+*        CRT @(21,14):SHIPVIA "L#15"
+         IF PO.TYPE # "D" THEN CRT @(0,23):"THIS SHOULD BE COLLECT!!":
+       END
+       REC<32> = FRT.CODE
+    END
+     IF SVCHECK # "Y" THEN
+       IF SVCODE[1,2] = "UP" THEN
+         IF FRT.CODE = 2 THEN
+           REC<16,-1> = "*** Ship via UPS Collect, account # 01RV25, put our PO# in reference! ***"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+         IF FRT.CODE = 4 THEN
+           REC<16,-1> = "* Ship via UPS direct to customer, acct# 01RV25, put PO# in reference! *"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+       END
+*       IF SVCODE[1,3] = "OLD" THEN
+       IF SVCODE[1,3] = "OD" THEN       
+         IF FRT.CODE = 2 THEN
+           REC<16,-1> = "***Please ship via Old Dominion Freight Line collect, account # 12418839 ***"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END        
+   
+**ADDED FOR FEDEX 2, 3, GROUND, OVERNIGHT - 02/13/15 - jemi
+       END
+       IF SVCODE[1,3] = "FE2" THEN
+         IF FRT.CODE = 2 THEN
+           REC<16,-1> = "***Please Ship Via FedEx - 2nd Day Air Collect - Charge Acct # 120158902 ***"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+         IF FRT.CODE = 4 THEN
+           REC<16,-1> = "**Ship via FedEx 2nd Day - 3rd Party - Direct Ship to customer - Charge Acct# 120158902 **"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+       END
+       IF SVCODE[1,3] = "FE3" THEN
+         IF FRT.CODE = 2 THEN
+           REC<16,-1> = "***Please Ship Via FedEx - 3rd Day Air Collect, Account # 120158902 ***"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+         IF FRT.CODE = 4 THEN
+           REC<16,-1> = "**Ship via FedEx 3-Day - 3rd Party - Direct Ship to customer - Charge Acct# 120158902 **"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+       END
+       IF SVCODE[1,3] = "FEG" THEN
+         IF FRT.CODE = 2 THEN
+           REC<16,-1> = "***Please Ship Via FedEx - GROUND Collect, Account # 120158902 ***"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+         IF FRT.CODE = 4 THEN
+           REC<16,-1> = "**Ship via FedEx GROUND - 3rd Party - Direct Ship to customer - Charge Acct# 120158902 **"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+       END
+       IF SVCODE[1,3] = "FEO" THEN
+         IF FRT.CODE = 2 THEN
+           REC<16,-1> = "***Please Ship Via FedEx - OVERNIGHT - Collect, Account # 120158902 ***"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+         IF FRT.CODE = 4 THEN
+           REC<16,-1> = "**Ship via FedEx OVERNIGHT - 3rd Party - Direct Ship to customer - Charge Acct# 120158902 **"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+**END ADDITIONS MADE 02/13/15 - jemi         
+       END
+       IF SVCODE[1,2] = "FE" OR SVCODE[1,2] = "FX" OR SVCODE[1,3] = "FXF" THEN
+         IF FRT.CODE = 2 THEN
+           REC<16,-1> = "*** Ship via FedEx Freight Collect, acct# 120158902 ***"
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+         IF FRT.CODE = 4 THEN
+           REC<16,-1> = "Ship via FedEx Freight - 3rd Party - Direct Ship to customer - Charge Acct# 120158902 "
+           REC<16,-1> = DDADD
+           SVCHECK = "Y"
+         END
+       END
+     END
+*** 
+* EST. FRT 
+*** 
+270 IF ENTRY.MODE = 'E' OR LINE = 14 THEN
+       PRINT @(21,17): ; INPUT EST.FRT
+       IF EST.FRT = 'TOP' THEN GOTO 100
+       IF EST.FRT = 'END' THEN RETURN
+       IF EST.FRT = '' THEN EST.FRT = OCONV(REC<52>,'MD2')
+       IF EST.FRT MATCHES '0N' OR EST.FRT MATCHES '0N.0N' THEN NULL ELSE GOTO 270
+       EST.FRT = ICONV(EST.FRT,'MD2')
+       PRINT @(21,17):OCONV(EST.FRT,'MD2')'L#15'
+**ESTIMATED FREIGHT TIME STAMP ENTRY**
+*          TS.REC = 'FRT CHNGD AT MATCH':' ':OCONV(REC<52>,'MD2'):'>':OCONV(EST.FRT,'MD2')  **changed 4/09/18 -jemi
+          TS.REC = 'FRT CHNG DURING MATCH'
+          TS.REC<2> = "EST FRT: ":OCONV(REC<52>,'MD2'):'>':OCONV(EST.FRT,'MD2')
+          TS.REC<5> = 'PO'
+          CALL IC.SR.TIME.STAMP.UPD (TS.REC,PO.NO)
+
+       IF EST.FRT+0 # 0 THEN
+          REC<51> = 'F'
+          REC<52> = EST.FRT
+       END ELSE
+          REC<51> = ''
+          REC<52> = ''
+       END
+**ASK IF CORRECT** JEMI 04/06/18**       
+      IF EST.FRT # "" THEN
+       PRINT @(0,22):@(-13):"ESTIMATED FREIGHT IS: ":OCONV(REC<52>,'MD2'):" IS THIS CORRECT? y/n: ":@(-14): ;  INPUT ANS:     
+       IF ANS # "Y" THEN GOTO 270
+       WRITE REC ON FILES(14),PO.NO
+       PRINT @(0,22):@(-4)"                                                                           "
+       END 
+   END
+*** 
+*** 
+* PLACED BY 
+*** 
+275 IF ENTRY.MODE = 'E' OR LINE = 15 THEN
+       PLACED.BY = USER.ID
+       PRINT @(21,18):PLACED.BY
+       PRINT @(21,18): ; INPUT PLACED.BY
+       IF PLACED.BY = 'TOP' THEN GOTO 100
+       IF PLACED.BY = 'END' THEN RETURN
+       IF PLACED.BY = '' THEN PLACED.BY = REC<40>
+       IF PLACED.BY = '' THEN PLACED.BY = USER.ID
+       PNAME = ''
+       IF P.R<8> = "Y" THEN
+          READV PNAME FROM FILES(25),PLACED.BY,1 ELSE GOTO 275
+       END
+       PRINT @(21,18):(PLACED.BY:SPACE(2):PNAME)'L#19':
+       REC<40> = PLACED.BY
+*    END ; 07/12/17
+*@@@@@@@@@@ ADD & WRITE the WBY Name, Phone & Email to the PO Record to send out with EDI  - JEMI 06/26/17
+*    IF SOURCE = 5 THEN GOTO 280
+*       REC<40> = PLACED.BY
+       WNAME = ""
+       READV WNAME FROM FILES(25),PLACED.BY,1
+       REC<110> = WNAME
+       WPHONE = ""
+       READV WPHONE FROM FILES(25),PLACED.BY,39
+       REC<111> = WPHONE
+       WEMAIL = ""
+       READV WEMAIL FROM FILES(25),PLACED.BY,42
+       REC<112> = WEMAIL
+    END
+*@@@@@@@@@@     
+*** 
+* PLACED WITH 
+*** 
+280 IF ENTRY.MODE = 'E' OR LINE = 16 THEN
+       PRINT @(21,19): ; INPUT PLACED.WITH
+       IF PLACED.WITH = 'TOP' THEN GOTO 100
+       IF PLACED.WITH = 'END' THEN RETURN
+       IF PLACED.WITH = '' THEN PLACED.WITH = REC<41>
+       REC<41> = PLACED.WITH
+       PRINT @(21,19):PLACED.WITH'L#18'
+    END
+*** 
+* INSTRUCTIONS 
+*** 
+285 IF ENTRY.MODE = 'E' OR LINE = 17 THEN
+       PRINT @(21,20): ; INPUT INST
+       IF INST = "TOP" THEN GOTO 100
+       IF INST = 'END' THEN RETURN
+       IF INST = "?" THEN
+          TITLE = 'VEND# (':REC<12>:')   ':VEND.REC<1>
+          CALL IQ.PLAN.REMARKS ( REC , '16' , TITLE , 'M' )
+          GOSUB 900 ;* FIST SCREEN FORMAT
+          GOSUB 910 ;* FIRST SCREEN CONTENT
+       END
+       IF REC<16,1> # '' THEN
+          PRINT @(21,20):'Y'
+       END
+    END   
+*** 
+* CONFIRM Y/N 
+*** 
+290 IF ENTRY.MODE = 'E' OR LINE = 18 THEN
+       PRINT @(65,9): ; INPUT INT.CODE
+       IF INT.CODE = "TOP" THEN GOTO 100
+       IF INT.CODE = "END" THEN RETURN
+       IF INT.CODE = "" THEN INT.CODE = REC<97>
+       PRINT @(64,9):INT.CODE
+       REC<97> = INT.CODE
+*      IF CONF.FLAG = 'TOP' THEN GOTO 100
+*      IF CONF.FLAG = 'END' THEN RETURN
+*      IF CONF.FLAG = '' THEN CONF.FLAG = REC<42>
+*      IF CONF.FLAG = "" THEN CONF.FLAG = "N"
+*      IF CONF.FLAG = "N" OR CONF.FLAG = "Y" THEN NULL ELSE GOTO 290
+*      PRINT @(61,9):CONF.FLAG
+*      REC<42> = CONF.FLAG
+    END
+*** 
+* SPECIAL PURCHASE
+*** 
+291 IF ENTRY.MODE = 'E' OR LINE = 19 THEN
+*-* LIMIT SPECIAL PURCHASES TO SELECT USERS ADDED 3/19/96.
+*** REQUIRE A SALES ORDER TO BE LISTED IN ATTR<23> BEFORE ALLOWING ENTRY  **Removed this requirement 04/21/16 per CHBU
+*** AS SPECIAL PURCHASE.
+       SPEC.PUR = "N"
+*       IF FILES(96)<79> = "Y" AND REC<23> # '' THEN  **changed on 04/21/16 per CHBU
+        IF FILES(96)<79> = "Y" THEN
+          PRINT @(65,10): ; INPUT SPEC.PUR
+          IF SPEC.PUR = 'TOP' THEN GOTO 100
+          IF SPEC.PUR = 'END' THEN RETURN
+          IF SPEC.PUR = '' THEN SPEC.PUR = REC<43>
+          IF SPEC.PUR = '' THEN SPEC.PUR = "N"
+          IF SPEC.PUR = "N" OR SPEC.PUR = "Y" THEN NULL ELSE GOTO 291
+       END
+       PRINT @(65,10):SPEC.PUR
+       REC<43> = SPEC.PUR
+    END
+*** 
+* LIST OR COST 
+*** 
+292 IF ENTRY.MODE = 'E' OR LINE = 20 THEN
+       PRINT @(0,23):'ENTER  (L=LIST COST) OR (C=COST) ':
+       PRINT @(65,11): ; INPUT L.C
+       PRINT @(0,23):@(-4):
+       IF L.C = 'TOP' THEN GOTO 100
+       IF L.C = 'END' THEN RETURN
+       IF L.C = '' THEN L.C = REC<61>
+       IF L.C = "" THEN L.C = "C"
+       IF L.C = "L" OR L.C = "C" THEN NULL ELSE GOTO 292
+       PRINT @(65,11):L.C
+       REC<61> = L.C
+    END
+*** 
+* VENDOR NO. (PAYABLE) 
+*** 
+293 IF ENTRY.MODE = 'E' OR LINE = 21 THEN
+       PRINT @(61,12): ; INPUT VEND.PAY.NO
+       IF VEND.PAY.NO = "TOP" THEN GOTO 100
+       IF VEND.PAY.NO = 'END' THEN RETURN
+       IF VEND.PAY.NO = "" AND REC<62> # "" THEN GOTO 296
+       IF VEND.PAY.NO = '' THEN VEND.PAY.NO = REC<62>
+       IF VEND.PAY.NO = '' THEN VEND.PAY.NO = REC<12>
+294    READ VEND.REC FROM FILES(33),VEND.PAY.NO ELSE
+          READ XREF.REC FROM FILES(34),FIELD(VEND.PAY.NO," ",1) ELSE
+             WRD = FIELD(VEND.PAY.NO," ",1)
+             CALL AR.SR.SOUNDEX(WRD,NWRD)
+             READ XREF.REC FROM FILES(34),NWRD ELSE
+                PRINT @(61,12):SPACE(15)
+                GOTO 293
+             END
+             VEND.PAY.NO = NWRD
+          END
+          IF XREF.REC<2> = "" THEN VEND.PAY.NO = XREF.REC<1> ; PRINT @(61,12):VEND.PAY.NO: ; GOTO 294
+          CALL AP.SR.VEND.XREF.DISPLAY(VEND.PAY.NO,SC)
+          REC<62> = VEND.PAY.NO
+          GOSUB 900
+          GOSUB 910
+          GOTO 294
+       END
+       PRINT @(61,12):VEND.PAY.NO'L#15'
+       REC<62> = VEND.PAY.NO
+       X = REC<21> ; REC<21> = 1
+       CALL IC.SR.PO.ADDR(VEND.REC,REC,ADDR)
+       REC<21> = X
+       FOR XX = 1 TO 4
+          PRINT @(44,12+XX):ADDR<1,XX>'L#35'
+       NEXT XX
+    END
+*** 
+* FAXIT 
+*** 
+    IF ENTRY.MODE = 'E' OR LINE = 22 THEN
+       PRINT @(61,17): ; INPUT FAXIT
+       IF FAXIT = 'TOP' THEN GOTO 100
+       IF FAXIT = 'END' THEN RETURN
+       IF FAXIT = '' THEN FAXIT = REC<67>
+       IF FAXIT = "" THEN FAXIT = "N"
+       IF FAXIT = "N" OR FAXIT = "Y" THEN NULL ELSE FAXIT = "N"
+       PRINT @(61,17):FAXIT'L#10':
+       REC<67> = FAXIT
+    END
+*** 
+*  CO-OP PERCENT 
+*** 
+296 IF ENTRY.MODE = 'E' OR LINE = 23 THEN
+       PRINT @(61,18): ; INPUT BO
+       IF BO = 'TOP' THEN GOTO 100
+       IF BO = 'END' THEN RETURN
+       IF BO = '' THEN BO = 'Y'
+       IF BO = 'N' OR BO = 'Y' THEN NULL ELSE BO = 'Y'
+       PRINT @(61,18):BO'L#15':
+       REC<95> = BO
+     END
+***    
+* VENDOR QUOTE#   - - added 09/12/19 -jemi
+***    
+297 IF ENTRY.MODE = 'E' OR LINE = 26 THEN
+       PRINT @(61,21): ; INPUT VEND.QUOTE
+       IF VEND.QUOTE = 'TOP' THEN GOTO 100
+       IF VEND.QUOTE = 'END' THEN RETURN
+       IF VEND.QUOTE = '' THEN VEND.QUOTE = REC<113>
+       REC<113> = VEND.QUOTE
+       PRINT @(61,21):VEND.QUOTE'L#18'
+    END
+***
+*      IF P.R<25> # "Y" THEN GOTO 299
+*      IF REC<77> = "" THEN
+*         READV COOP.PERC FROM FILES(33),REC<12>,89 ELSE COOP.PERC = ""
+*         REC<77> = COOP.PERC
+*         PRINT @(61,19):OCONV(COOP.PERC,"MD2")"R#7"
+*      END
+*      PRINT @(61,19):
+*      INPUT COOP.PERC
+*      IF COOP.PERC = 'TOP' THEN GOTO 100
+*      IF COOP.PERC = 'END' THEN RETURN
+*      IF COOP.PERC = "" THEN COOP.PERC = OCONV(REC<77>,"MD2")
+*      IF COOP.PERC = "O" THEN
+*         READV COOP.PERC FROM FILES(33),REC<12>,89 ELSE COOP.PERC = ""
+*         COOP.PERC = OCONV(COOP.PERC,"MD2")
+*      END
+*      PRINT @(61,19):COOP.PERC
+*      COOP.PERC = ICONV(COOP.PERC,"MD2")
+*      REC<77> = COOP.PERC
+*   END
+299 *IF ENTRY.MODE = 'C' THEN GOTO 310
+*** 
+* SELECTIONS 
+*** 
+300*PRINT @(0,23):'(Lineitems)(line#)(Delete)(Ignore)(End) ':
+    SEL.LINE='(L-lineitems)(line#)(D-Delete)'
+    IF ORG.REC='' THEN SEL.LINE=SEL.LINE:'(I-ignore PO)' ELSE SEL.LINE=SEL.LINE:'(I-ignore changes)'
+    SEL.LINE=SEL.LINE:'(E-end) '
+    PRINT @(0,23):SPACE(79):@(0,23):SEL.LINE:
+    INPUT SEL.CODE,4:
+    PRINT @(0,23):@(-4):
+    IF SEL.CODE = "I" THEN RETURN
+    IF SEL.CODE = "L" THEN GOTO 600 ;* LINE ITEMS
+*   IF SEL.CODE = "C" THEN GOTO 310 ;* CHANGE
+    IF SEL.CODE = "D" THEN GOTO 350 ;* DELETE
+    IF SEL.CODE = "E" THEN GOTO 400 ;* ACCEPT
+*** 
+* CHANGE 
+*** 
+310 IF SEL.CODE < 1 OR SEL.CODE > 26 THEN GOTO 300
+    ENTRY.MODE = "C"
+    LINE = SEL.CODE
+    GOTO 210
+*** 
+350* DELETE 
+*** 
+    IF SOURCE = 5 THEN RETURN
+*   CALL PM.PROHIBIT.PO.DELETE(  PO.NO, ORG.REC, DEL.FLAG )
+*   IF DEL.FLAG = 1 THEN GOTO 300
+***********************************
+* CALL MARRY.CHECK
+***********************************
+       DELETE.OKAY = "Y"
+       CALL IQ.IC.SR.MARRY.CHECK (REC,CVL,DELETE.OKAY,'P-ALL')
+       IF DELETE.OKAY # "Y" THEN GOTO 300
+*************************************
+    PRINT @(0,23):"O.K. TO DELETE THIS PURCHASE ORDER (Y=YES) ":CHAR(7):
+    INPUT ANS:
+    PRINT @(0,23):@(-4):
+    IF ANS # "Y" THEN GOTO 300
+    PRINT @(0,23):"REASON: ":CHAR(7):
+    INPUT ANS1:
+    PRINT @(0,23):@(-4):
+    CALL IC.SR.LINE.SO.NOS.POST ( PO.NO , "" , ORG.REC , "P" )
+    VAL = 0
+    IF REC<18> = "D" THEN GOTO 360
+    CALL IC.SR.QPR.UPDATE ( "" , ORG.REC , PROMPT.REC , PO.NO )
+360 READ VEND.REC FROM FILES(33),REC<12> ELSE GOTO 365
+    FOR J = 1 TO 99
+       IF VEND.REC<21,J> = "" THEN GOTO 365
+       IF VEND.REC<21,J> = PO.NO THEN
+          VEND.REC = DELETE(VEND.REC,21,J,0)
+          WRITE VEND.REC ON FILES(33),REC<12>
+          GOTO 365
+       END
+    NEXT J
+365 READ PO.TEMP.REC FROM FILES(14),PO.NO THEN
+       WRITE PO.TEMP.REC ON DELETED.POS,PO.NO
+    END
+    DELETE FILES(14),PO.NO
+*========================
+* PROJECT TRACKING
+*========================
+    IF PROMPT.REC<80> = 'Y' THEN
+       CALL IQ.SR.PROJECT.DOC.UPDATE ( 'P' , PO.NO , '' , ORG.REC )
+    END
+
+    TS.REC = 'D' ; TS.REC<2> = ANS1 ; TS.REC<5> = 'PO'
+    CALL IC.SR.TIME.STAMP.UPD ( TS.REC , PO.NO )
+    DELETE FILES(30),PO.NO
+    RETURN
+*** 
+* END OPTION 
+*** 
+400 IF REC<12> = "" THEN
+       PRINT @(0,23):"NO VENDOR NUMBER ASSIGNED FOR THIS PURCHASE ORDER (RETURN TO CONTINUE) ":
+       INPUT ANS:
+       PRINT @(0,23):@(-4):
+       GOTO 300
+    END
+    *brro: fix for ROP RGA input
+    IF PO.NO = "R" THEN
+       PO.NO = ""
+       CALL IC.SR.PO.NO ( SOURCE , P.R , WHSE.NO , PO.NO )
+       PRINT @(21,2):"RGA":PO.NO
+       PO.NO = "RGA":PO.NO
+    END
+    ***
+    IF PO.NO = "" THEN
+       CALL IC.SR.PO.NO ( SOURCE , P.R , WHSE.NO , PO.NO )
+    END
+    
+*****ADDED BY BRRO TO FIX RGA CREATION    
+*IF SOURCE = 1 THEN
+* 
+*      NEWRGA = 0
+*      
+*      FOR RGAL = 1 TO DCOUNT(REC<4>,@VM)
+*        IF REC<4,RGAL> < 0 THEN
+*          NEWRGA = 1
+*        END
+*      NEXT RGAL
+*      
+*      IF NEWRGA = 1 THEN
+*       IF PO.NO[1,3] # "RGA" THEN
+*         PO.NO = "RGA":PO.NO
+*       END
+*      END
+*      
+*END   
+*****************************
+420 IF SOURCE = 3 THEN
+       IF PO.NO[1,1] # "R" THEN PO.NO = "R":PO.NO
+       IF RTN.ST = "Y" THEN CALL IC.SR.RTN.DEL ( REC )
+    END
+    IF SOURCE = 5 THEN
+       CALL IC.SR.PO.ADJ ( ORG.REC , REC , PO.NO )
+       RETURN
+    END
+    CALL IC.SR.PO.CHANGE (PO.NO,ORG.REC,REC)
+    IF P.R<15> # "Y" THEN CALL IC.SR.QPR.UPDATE ( REC , ORG.REC , PROMPT.REC , PO.NO )
+    CALL IC.SR.LINE.SO.NOS.POST ( PO.NO , '' , ORG.REC , "P" )
+     DDREC = REC; DDREC<9> = "TESTING"
+    CALL DADR.SR.KIT.MARRY.POST (PO.NO, REC, "", "P")
+    CALL IC.SR.LINE.SO.NOS.POST ( PO.NO , REC , '' , "P" )
+    CALL IC.SR.MARRY.POST (PO.NO,REC)
+    CALL DADR.SR.KIT.MARRY.POST (PO.NO, REC, DDREC, "P")
+*========================
+* PROJECT TRACKING
+*========================
+    IF PROMPT.REC<80> = 'Y' THEN
+       CALL IQ.SR.PROJECT.DOC.UPDATE ( 'P' , PO.NO , REC , ORG.REC )
+    END
+*** 
+* DELETE DELETED LINES 
+*** 
+    IF P.R<15> = "Y" THEN GOTO 440
+    FOR XX = 1 TO 9999
+430    IF REC<2,XX> = "" THEN GOTO 440
+       IF REC<5,XX> = "D" THEN
+          FOR YY = 2 TO 8 ; REC = DELETE(REC,YY,XX,0) ; NEXT YY
+          REC = DELETE(REC,19,XX,0)
+          REC = DELETE(REC,20,XX,0)
+          REC = DELETE(REC,25,XX,0)
+          REC = DELETE(REC,35,XX,0)
+          REC = DELETE(REC,36,XX,0)
+          REC = DELETE(REC,108,XX,0)
+          GOTO 430
+       END
+    NEXT XX
+440 IF ORG.REC<12> = REC<12> THEN GOTO 450
+    IF ORG.REC<12> # '' THEN
+       READ VEND.REC FROM FILES(33),ORG.REC<12> ELSE VEND.REC = ''
+       LOCATE(PO.NO,VEND.REC,21;J) THEN
+          VEND.REC = DELETE(VEND.REC,21,J,0)
+          WRITE VEND.REC ON FILES(33),ORG.REC<12>
+       END
+    END
+    READ VEND.REC FROM FILES(33),REC<12> ELSE GOTO 450
+    LOCATE(PO.NO,VEND.REC,21;J) ELSE
+       VEND.REC<21,-1> = PO.NO
+       WRITE VEND.REC ON FILES(33),REC<12>
+    END
+450 CALL IC.SR.PO.CAT.DISC ( REC , PROMPT.REC , P.R , PO.NO , VEND.REC<1> )
+    CALL SR.CCR (REC)
+    ORG.REC = REC
+    WRITE REC ON FILES(14),PO.NO
+    TEST1.REC = REC
+*   CALL IC.SR.PO.HEADER.CHANGE ( PO.NO , TEST.REC , TEST1.REC )
+* 
+*==================
+* UPDATE TIME STAMP 
+*==================
+* 
+    TS.REC = 'E'
+*   IF ORG.REC # '' THEN TS.REC = 'C'
+    TS.REC<5> = 'PO'
+*   CALL IC.SR.TIME.STAMP.UPD ( TS.REC , PO.NO )
+    IF TEST.REC = '' THEN CALL IC.SR.TIME.STAMP.UPD (TS.REC,PO.NO)
+*~* JEMI ADDED 07/21/20    
+      TS.REC = "PO GENERATED: "
+      TS.REC<2> = "PO #: ":PO.NO
+      CALL OE.SR.TIME.STAMP.UPD (TS.REC,SO.NO)      
+*~*      
+460 CALL IC.SR.PO.LAST.SCREEN ( PO.NO , REC , VEND.REC )
+    IF REC<12> = "" THEN
+       PRINT @(0,23):"NO VENDOR NUMBER, PLEASE DEFINE THE VENDOR (RETURN TO CONTINUE) ":
+       INPUT ANS
+       GOSUB 900 ; GOSUB 910
+       GOTO 300
+    END
+470 PRINT @(0,21):@(-3):"(F)ax(E)mail(P)rint(H)eader(DISC%)(C)ontinue(R)Vend remarks":
+    IF VEND.REC<122>='Y' THEN PRINT @(-13):' (EDI) ':@(-14):
+    PRINT ' ':
+    INPUT ANS:
+    PRINT @(0,22):@(-4):
+    IF ANS = "" OR ANS = "C" THEN GOTO 480
+    IF ANS = "END" THEN RETURN
+
+    IF ANS = "R" THEN
+       NAME = VEND.REC<1> ; V.NUM = REC<12>
+       TITLE = 'VEND# (':V.NUM:')   ':NAME
+       CALL IQ.PLAN.REMARKS ( VEND.REC , '16' , TITLE , 'D' )
+       GOTO 460
+    END
+    IF ANS = "" THEN GOTO 480
+    IF ANS = "P" THEN
+       PRINT @(0,23):'Default PTR#: ':PTR.NO:'   Enter new PTR# or [RETURN] for same : ':
+       INPUT PTR.NEW
+       IF PTR.NEW = '' THEN NULL ELSE PTR.OLD = PTR.NO; PTR.NO = PTR.NEW
+       PRINT @(0,23):@(-4):'(1=RECEIVING COPY),(2=VENDOR COPY) ':
+       INPUT ANS:
+       IF ANS = 1 OR ANS = 2 THEN NULL ELSE GOTO 470
+       TYPE = ANS
+       IF PMODE = 1 THEN
+          EXECUTE "SP-ASSIGN F":PTR.NO
+          PRINTER ON
+       END ELSE
+          PRINT CHAR(18):
+       END
+       OPEN "","PRINTER.DEFS" TO PDEF.FILE ELSE NULL
+       READV PTYPE FROM PDEF.FILE,PTR.NO,1 ELSE PTYPE = ""
+       TS.REC='P'; TS.REC<2>='PTR: ':PTR.NO; TS.REC<5>='PO'
+       CALL IC.SR.TIME.STAMP.UPD (TS.REC,PO.NO)
+       CALL IC.SR.PO.PRINT ( REC , PO.NO , TYPE, PTYPE)
+       IF PMODE = 1 THEN PRINTER OFF;PRINTER CLOSE ELSE PRINT CHAR(20):
+       GOTO 460
+    END
+    IF ANS = "H" THEN
+       GOSUB 900 ; GOSUB 910
+       GOTO 300
+    END
+    IF ANS = "END" THEN RETURN
+    IF ANS = "C" THEN GOTO 480
+***** TEST IF EDI VENDOR
+    IF VEND.REC<122>="Y" AND ANS # "EDI" THEN
+      CRT @(0,22):@(-13):"This is an EDI vendor.  Please use the EDI option!! ":@(-14):
+      CRT @(0,23):'Do you STILL want to use the "':ANS:'" option? Y/N: ':
+      INPUT PAUSE:
+      IF PAUSE = "Y" THEN NULL ELSE GOTO 470
+    END
+************************
+    IF ANS='EDI' AND VEND.REC<122>='Y' THEN
+** BETTY 10/19/11 PER JEANNA **
+       GOSUB CHECK.ZNS
+ZNS:   IF ZNS.YN = "Y" THEN
+          PRINT @(0,22):SPACE(75):@(2,22):@(-13):"NOTE: You have ZNS part #'s - you MUST include the Vendor Part# ":@(-14):"Proceed to... send EDI? Y/N: ":
+          INPUT ANS:
+          IF ANS # "Y" THEN GOTO 470
+       END
+       CALL PO.850 (PO.NO,REC,'PO')
+    END    
+    IF ANS = 'F' THEN
+       VEND.NO = REC<12>
+       PO.FLAGS = 2
+       CALL IQ.SR.FAXIT.HEADER ( VEND.NO , VEND.REC , FAX.REC , 'V' , 'PO' , PO.NO , REC , PO.FLAGS )
+       GOTO 460
+    END
+    IF ANS='E' THEN
+       CALL IC.PO.EMAIL (PO.NO)
+       GOTO 460
+    END    
+
+    IF ANS MATCHES "0N" OR ANS MATCHES "0N.0N" THEN NULL ELSE GOTO 460
+    DISC = ICONV(ANS,"MD2")
+    PRINT @(0,23):"ARE YOU SURE YOU WANT TO APPLY DISCOUNT ":OCONV(DISC,"MD2"):"  (N = NO) ":
+    INPUT ANS:
+    PRINT @(0,23):@(-4):
+    IF ANS = "N" THEN GOTO 460
+*** 
+* REDUCE THE COST BY GIVEN % 
+*** 
+    CALL IC.SR.PO.DISC ( REC , DISC , P.R )
+    CALL SR.CCR (REC)
+    WRITE REC ON FILES(14),PO.NO
+    TS.REC = 'E'
+    IF ORG.REC # '' THEN TS.REC = 'C'
+    TS.REC<5> = 'PO'
+*   CALL IC.SR.TIME.STAMP.UPD ( TS.REC , PO.NO )
+    IF TEST.REC = '' THEN CALL IC.SR.TIME.STAMP.UPD (TS.REC,PO.NO)
+    TEST.REC = '' ; TEST1.REC = ''
+    GOTO 460 
+       
+*** JEMI ADDED 11/20/19 ***  TECSYS WMS FEED *** 
+480 IF FILES(95) # "NACH" AND WHSE.NO = "1" THEN
+       IF PO.NO[1,1] = "R" AND REC<1> = "1" THEN GOTO 481
+
+     IF REC<18> # "D" AND REC<1> = "1" THEN
+      CRT @(0,22):"    PO PROCESSING.......... SENDING PO TO WMS......":     
+      CALL XML.WMS.EXPECTED.RECEIPTS(PO.NO)
+     END
+*!* 9/10/20 - moved the TS Update into the XML program *!*     
+*      TS.REC = 'PO SENT TO TECSYS'
+*      TS.REC<5> = 'PO'
+*      CALL IC.SR.TIME.STAMP.UPD (TS.REC,PO.NO)      
+     GOTO 485
+       
+481   CRT @(0,22):"    RGA PROCESSING......... SENDING RGA / PO TO WMS......": 
+      CALL XML.WMS.XFER.VRET.UP (PO.NO)      
+       TS.REC = 'RGA SENT TO TECSYS'
+          TS.REC<5> = 'PO'
+          CALL IC.SR.TIME.STAMP.UPD (TS.REC,PO.NO)
+    END 
+*~* 
+*********      
+485 IF SOURCE = "1" THEN RETURN
+    IF SOURCE = "2" THEN
+       UPD.FLAG = ""
+       FOR XY = 1 TO 9999
+          IF REC<2,XY> = "" THEN GOTO 490
+          IF REC<5,XY> GT 0 THEN
+             REC<19,XY> = 0
+             REC<20,XY> = "B"
+          END ELSE
+             REC<19,XY> = REC<5,XY>
+             REC<20,XY> = "C"
+             UPD.FLAG = "1"
+          END
+       NEXT XY
+490    IF UPD.FLAG = "1" THEN
+          REC<11> = DATE()
+          CALL SR.CCR (REC)
+          WRITE REC ON FILES(30),PO.NO
+          CALL IC.SR.PO.PROCESS.UPDATE ( PO.NO )
+       END
+    END
+    RETURN
+*** 
+* PO LINES ENTRY/CHANGE 
+*** 
+600* 
+    IF REC<2> = "" THEN
+       RTYP = ""
+       IF INSTALL.REC<14> = "Y" THEN RTYP = "(R = REPLENISHMENT) "
+       PRINT @(0,23):"ENTER (C=CATEGORY) (V=VENDOR) ":RTYP:"PO CONVERSION : ": ; INPUT ANS,2:
+       PRINT @(0,23):@(-4):
+       IF ANS = "C" OR ANS = "V" OR ANS = "R" THEN NULL ELSE GOTO 610
+       IF ANS = "C" THEN
+          PRINT @(0,23):"ENTER CATEGORY NUMBER(S) : ": ; INPUT CONV:
+          ZZ = 1 ; CONV.NO = ''
+          LOOP UNTIL FIELD(CONV,' ',ZZ) = '' DO
+             CONV.NO<ZZ> = 'C':FIELD(CONV,' ',ZZ)
+             ZZ = ZZ + 1
+          REPEAT
+       END
+       IF ANS = "V" THEN
+          PRINT @(0,23):"ENTER VENDOR NUMBER (RETURN FOR SAME VENDOR) : ": ; INPUT CONV:
+          IF CONV = "" THEN CONV = REC<12>
+          CONV.NO = "V":CONV
+       END
+       IF ANS = "R" THEN
+          IF INSTALL.REC<14> # "Y" THEN GOTO 610
+          PRINT @(0,23):"ENTER REPLENISHMENT NUMBER : ": ; INPUT CONV:
+          CONV.NO = "R":CONV
+       END
+       PRINT @(0,23):@(-4):
+       CALL IC.SR.PO.WORK.CONV(PO.NO , REC , CONV.NO , PROMPT.REC , INSTALL.REC , P.R )
+    END
+610 V.NUM = REC<12>
+    CALL IC.SR.PO.LINES ( SOURCE , PO.NO , REC , PROMPT.REC , V.NUM , VEND.REC , P.R , COST.SUPPRESS , XREF.USAGE , DCOL , RTN.ST , INSTALL.REC )
+    GOSUB 900
+    GOSUB 910
+    GOTO 300
+*** 
+* DISPLAY SHIPPING DATA 
+*** 
+890 IF REC<18> = 'D' THEN
+       IF REC<14>#'' AND REC<15> ='' THEN
+          READ CUST.REC FROM FILES(4),REC<14> ELSE CUST.REC = ''
+          S.A1 = CUST.REC<1>
+          S.A2 = CUST.REC<2,1>
+          S.A3 = CUST.REC<2,2>
+          S.A4 = CUST.REC<3>:"  ":CUST.REC<4>:"  ":CUST.REC<5>
+          IF S.A3 = '' THEN
+             S.A3 = S.A4
+             S.A4 = ''
+          END
+       END ELSE
+          S.A1 = REC<15,1> ; S.A2 = REC<15,2> ; S.A3 = REC<15,3>
+          S.A4 = REC<15,4>:" ":REC<15,5>:" ":REC<15,6>
+          IF S.A3 = "" THEN
+             S.A3 = S.A4
+             S.A4 = ""
+          END
+       END
+    END ELSE
+       READ S.A FROM FILES(2),REC<1> ELSE S.A = ''
+       S.A1 = S.A<3>
+       S.A2 = S.A<4,1>
+       S.A3 = S.A<4,2>
+       S.A4 = S.A<5>:"  ":S.A<6>:"  ":S.A<7>
+       IF S.A3 = '' THEN S.A3 = S.A4 ; S.A4 = ''
+       IF S.A<11,1> # "" THEN
+          S.A2 = S.A<11,1>
+          S.A3 = S.A<11,2>
+          S.A4 = ""
+       END
+    END
+    PRINT @(44,4):S.A1'L#35'
+    PRINT @(44,5):S.A2'L#35'
+    PRINT @(44,6):S.A3'L#35'
+    PRINT @(44,7):S.A4'L#35'
+* 
+    REC<15,1> = S.A1
+    REC<15,2> = S.A2
+    REC<15,3> = S.A3
+    REC<15,4> = S.A4
+    RETURN
+*** 
+* DISPLAY SCREEN 
+*** 
+900 CALL IC.SR.PO.SCREEN1 ( SOURCE , WHSE.NO )
+    RETURN
+*** 
+* DISPLAY CONTENTS 
+*** 
+910 READ VEND.REC FROM FILES(33),REC<12> ELSE VEND.REC = ''
+    CALL IC.SR.PO.CONT.SCREEN1 ( PO.NO , REC , WHSE.NO )
+    RETURN
+CHECK.ZNS:
+ZNS.YN = ""
+NO.ITEMS = DCOUNT(REC<2>,CHAR(253))
+FOR NN = 1 TO NO.ITEMS
+    ITEM.NO = REC<2,NN>
+    IF ITEM.NO[2,3] = "ZNS" THEN ZNS.YN = "Y" ; RETURN
+NEXT NN
+RETURN
+********************************
+END

@@ -1,0 +1,507 @@
+SUBROUTINE XML.WMS.XFER.TIED.2.PO.UPD
+
+******* updates made to XML.WMS.XFER.TIED.2.PO  03/02/21  ---  calling from:  TECSYS.5MIN.PHANTOM
+
+
+* 7/14/20 COPIED FROM SUBROUTINE XML.WMS.XFER.VRET.UP(ORDER.NO)
+* REMOVE VRET FROM SUBROUTINE
+* IF <35> # "" THEN IT'S TIED TO A PO
+
+*!* I think we may need to send a Delete first - but that'll be dependant on the required date
+
+*~* 06/16/20 Update to use <114> for the ShipVia Code + get rid of '&'
+*~* 07/14/20 - Change the FillShortage to "Y"es if the XF is tied to a PO
+*~* 09/16/20 - Updated to address changes in XML.WMS.XFER.VRET.UP
+*~* 10/26/20 - Updated to confirm Emergency = '0' and Pick.verify = "0" if tied to a PO
+*~* 12/10/20 - Added to: tecsys.wms.phantom - sleep moved into this phantom
+
+SELECT.FILES:
+
+ODATE = DATE()
+OTIME = TIME()
+
+ERROR = ""
+XML = ""
+TL = ""
+COMMON FILES(200)
+CALL IQ.OPEN
+*IF FILES(95) = "JEMI" THEN DEBUG
+
+OPEN "PO" TO F.PO ELSE ERROR = "Unable to open Purchase Order file!" ;  * If <1> = 1
+OPEN "STOCK-TRANSFER" TO F.ST ELSE ERROR = "Unable to open Purchase Order file!"  ; * If <2> = 1
+OPEN "BRANCH" TO F.BRANCH ELSE ERROR = "Unable to open BRANCH file!"
+OPEN "VENDOR" TO F.VENDOR ELSE ERROR = "Unable to open VENDOR file!"
+OPEN "SHIP_IN" TO F.IN ELSE ERROR = "Unable to open TECSYS-OUTBOUND file!"
+****
+OPEN "INVENTORY" TO F.INV ELSE ERROR = "Unable to open INVENTORY file!"
+OPEN "PRODUCT-MASTER" TO F.PM ELSE ERROR  = "Unable to open PRODUCT-MASTER file!"
+****
+XML = ""
+XML<-1>="<transactions>"
+
+ACTION = "5"                                 ;  * 1= Create, 2= Update, 3=Delete, 4 = Create OR Update, 5 is Create OR Replace
+VIEWNAME = "wms_stg_om_f.ship_in.si_es"
+FILENAME = "ship_in"
+
+*********** A78 added 02/24/21 - indicates tied to PO ************************
+********//////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+*EXECUTE 'SSELECT STOCK-TRANSFER WITH FBR = "1" AND WITH WMS-STAT = "" AND WITH PO# # "" ' CAPTURING JUNK
+*EXECUTE 'SSELECT STOCK-TRANSFER WITH FBR = "1" AND WITH PO# # "" ' CAPTURING JUNK
+EXECUTE 'SSELECT STOCK-TRANSFER WITH FBR = "1" AND WITH A78 = "Y" AND WITH PO# # "" AND WITH WMS-STAT = "" ' CAPTURING JUNK
+
+********//////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+RN: READNEXT ORDER.NO THEN
+
+*****************************************************
+*TECSYS DATA REQUIREMENTS BY SECTION IDENTIFIED BELOW
+*****************************************************
+ACTION = "5"                                 ;  * 3=Delete, 5 is Create OR Replace
+RECORD.STAT = "2"                            ;  * 1 = On Hold,  2 = Ready for Transfer,  3 - Transferred
+X.CODE = "OXFR"                              ;  * STOCK-TRANSFER
+X.TYPE = "XF"                                ;  * OrderType
+ASN = "N"                                    ;  *  Y or N  - based upon being an EDI Order
+X.PACK.SEP = "N"
+
+*~* below settings for cross-docking
+EMERGENCY = "0"
+PICK.VERIFY = "0"
+SHORTS = "Y"      
+PRNT.PRICE = "0"
+CUST.PRICE = "0"
+BO.YN = "0"
+
+*****************************************************
+*TECSYS DATA REQUIREMENTS BY SECTION IDENTIFIED BELOW
+*****************************************************
+O.DATE = "" ; S.VIA = "" ;  NA = "" ; CUST.NO = "" ; CUST.PO = "" ; R.DATE = "" ; PAY.METHOD = "" ; FRT.TERMS = "" ; FORKLIFT = "" ; JOB.NAME = "" ; W.BY = "" ; WBY = "" ;
+BILLTO.NAME = "" ; BILLTO.ADD1 = "" ; BILLTO.ADD2 = "" ; BILLTO.CITY = "" ; BILLTO.STATE = "" ; BILLTO.ZIP = "" ; BILLTO.PH = "" ; OUR.PO = "" ;
+SHIPTO.NAME = "" ; SHIPTO.ADD1 = "" ; SHIPTO.ADD2 = "" ; SHIPTO.CITY = "" ; SHIPTO.STATE = "" ; SHIPTO.ZIP = "" ; SHIPTO.PH = "" ;
+SO = "" ; V.PO = "" ; V.NO = "" ; T.BR.NO = "" ; W.BY = "" ;
+REM = "" ; REM.CODE = "" ; REM.NO = '' ; PRT.PICK = "" ; PRT.PACK = "" ; PRT.LABEL = "" ; PRT.MANIFEST = "" ; PRINT = "" ;
+
+PART.NO = "" ; LINE.NO = "" ; Q.ORD = "" ; UOM = "" ; U.PRICE = "" ; SERIAL = "" ; DESC = "" ; RR.DATE = "" ; MARRY.LINE = "" ; WMS = "" ;
+
+ORDER = "" ; VENDOR = "" ; V.NAME = "" ; O.ORD = "" ; TYPE = "" ; CUST.NO = "" ;
+
+O.COMMENT = "" ; C.NUM = "" ; C.PUT = "" ; C.PRTSEQ = '' ; NA = "" ; TOT.LINES = ""
+
+PART.NO = "" ; LINE.NO = "" ; Q.ORD = "" ; P.UOM = "" ; COST = "" ;
+
+L.COMMENT = "" ; 
+
+************************************
+*** Outbound Order Header stg_xo_f *
+************************************
+MetaStagingAction = ACTION
+MetaStagingRecordStatus = RECORD.STAT
+MetaStagingViewName = VIEWNAME
+MetaStagingAction = ACTION
+MetaStagingRecordStatus = RECORD.STAT
+MetaStagingViewName = VIEWNAME
+Warehouse = "BRANCH1"                          ;  * PER TECSYS
+*Order = ORDER.NO
+AsnRequired = ASN
+OrderType =  X.TYPE                          ;  * PASS THE TYPE FROM THE ORIGINATING PROGRAM - PO(VR) OR XF - see above
+SalesOrder = SO                              ;  * xfer = <11,2> and po = <23>
+                                             ;  * don't need to send the SO <11,2> on an XF
+BilltoPo = V.PO                              ;  * 
+BilltoCustomer = V.NO                        ;  * * PO:Attribute 12    XF:Attribute 2
+BilltoName = V.NAME                          ;  * Vendor <1>         XF:BRANCH <3>
+BilltoAddress1 = BILLTO.ADD1                 ;  * Vendor <2,1>          BR <2>
+BilltoAddress2 = BILLTO.ADD2                 ;  * Vendor <2,2>       XF: BRANCH <4>
+BilltoCity = BILLTO.CITY                     ;  * Vendor <3>         XF:BRANCH <5>
+BilltoStateOrProvince = BILLTO.STATE         ;  * Vendor <4>         XF:BRANCH <6>
+BilltoZipOrPostalCode = BILLTO.ZIP           ;  * Vendor <5>         XF:BRANCH <7>
+BilltoPhoneNumber = BILLTO.PH                ;  * Vendor <6>         XF:BRANCH <8> or <14>
+*~* SHIP TO INFO SAME AS THE BILL TO *~*
+ShiptoName = V.NAME
+ShiptoAddress1 = BILLTO.ADD1
+ShiptoAddress2 = BILLTO.ADD2
+ShiptoCity = BILLTO.CITY
+ShiptoStateOrProvince = BILLTO.STATE
+ShiptoZipOrPostalCode = BILLTO.ZIP
+ShiptoPhoneNumber = BILLTO.PH
+SHIPTO.COUNTRY = 'US'
+BILLTO.COUNTRY = 'US'
+
+OrderDate = O.DATE                           ;  * PO:Attribute 9     XF:Attribute 3
+RequestedDate = R.DATE                       ;  * PO:Attribute 10    XF:Attribute 20
+CarrierService = S.VIA                       ;  * PO:Attribute 13    XF:Attribute 23
+PackAndMarkSeparately = X.PACK.SEP           ; * PO = "Y" V.PACK.SEP = "Y" /  XFER = "N"  X.PACK.SEP = "N"
+CustomChar2 = W.BY                           ;  * PO:Attribute 40    XF:Attribute 21
+PickVerificationLevel = PICK.VERIFY          ;  * 0 - None, 1 - Level 1, 2 - Level 2
+SalesOrder = O.ORD                           ;  * PO:Attribute 23    XF:Attribute 11,2
+CustomChar7 = X.CODE                         ;  * FOR US TO KNOW THE ORDER TYPE v.code or x.code
+CustomNumeric5 = TOT.LINES                    ;  * I need the total line count when processing the return xml
+
+*~* stock xfer Only *~*
+*Transfer = ORDER.NO ; * If a Stock-Xfer         
+StoreNumber = T.BR.NO                         ; * xfer <2>
+
+*Priority =                                  ;  * 1-99 ; 1 being the highest  (using emergency below instead)
+*** How to handle the Carson and Truckee Noon - may need to do a calculation based upon time
+
+Emergency = "0"                              ;  * 0 - Regular, UNLESS  1- Rush (WC) and 2 = Interupt (CS)
+
+*********************************
+* Outbound Order Lines stg_od_f *
+*********************************
+OrderLine = LINE.NO                          ;  * Line Number
+Item = PART.NO                               ;  * PO:Attribute 2     XF:Attribute 4
+QuantityOrdered = Q.ORD                      ;  * PO:Attribute 5     XF:Attribute 5
+OrderUom = UOM                               ;  * PO:Attribute 7     XF:Attribute 6
+UnitPrice = U.PRICE                          ;  * <7>
+LineItemDescription = DESC                   ;  * PO:Attribute 3     XF:Attribute 4 (multivalued w/part#)
+OriginalQuantity = Q.ORD                     ;  * Same as Qty Ordered
+PlanQuantity = Q.ORD
+FillShortages = SHORTS                       ;  * This field should be set to No if host_backordered is set to Yes
+                                             ;  * unless tied to a PO then Shorts must be Yes for cross-docking
+                                             
+RequestedReceiptDate = RR.DATE               ;  * PO:Attribute 10    XF:Attribute 20
+OpenOrderQuantity = Q.ORD
+CustomerPo = MARRY.LINE
+CustomerPoLine = LINE.NO
+CustomerItem = PART.NO
+
+
+*** No need to program Stock Xfer's for KITS ***  they order by Part
+*KitLineType                                  ;  *Line type for the kit component. 0-N/A, 1-End Item, 2-Component
+*KitOrderGroup                                ;  *Kit order group.
+*KitComponentMultiplier                       ;  *Multiplier of the kit component in stocking unit of measure.
+
+********************************************
+* Outbound Order Detail Comments  stg_xd_f *
+*<WmsStagingOutboundOrderDetailComments>   *
+********************************************
+Sequence = LINE.NO                           ;  * AUTO-NUMBER
+Comment = L.COMMENT                          ;  * XF:Attribute 24 - but could also be Line 2 in the Description if not the SO
+PrintSequence = LINE.NO                      ;  * AUTO-NUMBER
+PrintOnPickList = PRT.PICK                   ;  * Default = Y 
+PrintOnMasterPackingList = PRT.PACK          ;  * Default = Y
+PrintOnShippingLabel = PRT.LABEL             ;  * Default = Y
+PrintOnManifest = PRT.MANIFEST               ;  * Default = Y
+PrintSequence = LINE.NO                      ;  * AUTO-NUMBER
+                         
+************************************
+* Outbound Order Comments stg_xo_f *
+************************************
+Sequence = LINE.NO                           ;  * AUTO-NUMBER
+Comment = O.COMMENT                          ;  * PO:Attribute 16    XF:Attribute 24
+PrintOnPickList = PRT.PICK                   ;  * Default = Y 
+PrintOnMasterPackingList = PRT.PACK          ;  * Default = Y
+PrintOnShippingLabel = PRT.LABEL             ;  * Default = Y
+PrintOnManifest = PRT.MANIFEST               ;  * Default = Y
+PrintSequence = LINE.NO                      ;  * AUTO-NUMBER
+  
+***********************
+* STOCK-TRANSFER CODE *
+***********************
+
+
+20    READ ST.REC FROM FILES(77),ORDER.NO ELSE GOTO 100
+      ORDER = ORDER.NO
+
+IF ORDER.NO = "" THEN RETURN
+
+  PRINT "OXFER: ":ORDER.NO
+
+      Transfer = ORDER.NO ; * If a Stock-Xfer
+          
+*~* UPDATE THE XFER RECORD THAT IT'S BEEN PASSED TO TECSYS *~*
+      ST.REC<67> = "WMS-TIED"
+      ST.REC<77> = "NEW"
+WRITE ST.REC TO FILES(77),ORDER.NO
+*~*       
+      X.CODE = "OXFR"                              ;  * STOCK-TRANSFER
+      X.TYPE = "XF"                                ;  * OrderType
+      TYPE = X.TYPE  
+      CONVERT '\' TO ' - ' IN ST.REC
+      V.NO = ST.REC<2>
+      READ BR.REC FROM F.BRANCH,V.NO ELSE BR.REC = ''
+       CONVERT '\' TO '-' IN BR.REC
+       CONVERT '&' TO ' ' IN BR.REC
+       CONVERT '<' TO '(' IN BR.REC
+       CONVERT '>' TO ')' IN BR.REC
+      V.NAME = BR.REC<3>
+      BILLTO.ADD1 = BR.REC<2>
+      BILLTO.ADD2 = BR.REC<4>     
+      BILLTO.CITY = BR.REC<5>
+      BILLTO.STATE = BR.REC<6>
+      BILLTO.ZIP = BR.REC<7>
+      BILLTO.PH = BR.REC<14>
+*~* SHIP TO INFO SAME AS THE BILL TO *~*
+      SHIPTO.NAME = ST.REC<21>
+      SHIPTO.ADD1 = BR.REC<2>
+      SHIPTO.ADD2 = BR.REC<4>    
+      SHIPTO.CITY = BR.REC<5>
+      SHIPTO.STATE = BR.REC<6>
+      SHIPTO.ZIP = BR.REC<7>  
+      SHIPTO.PH = BR.REC<8>
+      O.DATE = OCONV(ST.REC<3>,'D4/')
+         YYYY = O.DATE[7,4]
+         MM = O.DATE[1,2]
+         DD = O.DATE[4,2]
+      O.DATE = YYYY:"-":MM:"-":DD    
+      R.DATE = OCONV(ST.REC<20>,'D4/') 
+         YYYY = R.DATE[7,4]
+         MM = R.DATE[1,2]
+         DD = R.DATE[4,2]
+      R.DATE = YYYY:"-":MM:"-":DD      
+      A.DATE = OCONV(ST.REC<10>,'D2/')
+      S.VIA = ST.REC<23>
+      W.BY = ST.REC<21>
+
+   IF SHIPTO.STATE = "BC" THEN SHIPTO.COUNTRY = "CA"
+   IF BILLTO.STATE = "BC" THEN BILLTO.COUNTRY = "CA"
+
+********************
+* XFER HEADER FEED *
+********************
+XML<-1>=" <transaction>"
+XML<-1>="   <WmsShipmentInSiEs>"
+XML<-1>="      <Warehouse>":Warehouse:"</Warehouse>"
+XML<-1>="      <MetaStagingAction>":ACTION:"</MetaStagingAction>"
+XML<-1>="      <MetaStagingViewName>":VIEWNAME:"</MetaStagingViewName>"
+XML<-1>="      <MetaStagingRecordStatus>":RECORD.STAT:"</MetaStagingRecordStatus>"
+XML<-1>="      <ORDER>":ORDER.NO:"</ORDER>"
+XML<-1>="      <OrderType>":X.TYPE:"</OrderType>"
+XML<-1>="      <TransactionType>":X.TYPE:"</TransactionType>"
+XML<-1>="      <TransactionCode>":X.CODE:"</TransactionCode>"
+XML<-1>="      <AsnRequired>":ASN:"</AsnRequired>"
+
+**************************************
+
+         OUR.PO = ST.REC<35,1>
+
+XML<-1>="      <StoreNumber>":V.NO:"</StoreNumber>"
+*~* BILL TO
+XML<-1>="      <BilltoCustomer>":V.NO:"</BilltoCustomer>"
+XML<-1>="      <BilltoName>":V.NAME:"</BilltoName>"
+XML<-1>="      <BilltoAddress1>":BILLTO.ADD1:"</BilltoAddress1>"
+XML<-1>="      <BilltoAddress2>":BILLTO.ADD2:"</BilltoAddress2>"
+XML<-1>="      <BilltoCity>":BILLTO.CITY:"</BilltoCity>"
+XML<-1>="      <BilltoStateOrProvince>":BILLTO.STATE:"</BilltoStateOrProvince>"
+XML<-1>="      <BilltoZipOrPostalCode>":BILLTO.ZIP:"</BilltoZipOrPostalCode>"
+XML<-1>="      <BilltoPhoneNumber>":BILLTO.PH:"</BilltoPhoneNumber>"
+XML<-1>="      <BilltoCountry>":BILLTO.COUNTRY:"</BilltoCountry>"
+*~* SHIP TO              
+XML<-1>="      <ShiptoName>":SHIPTO.NAME:"</ShiptoName>"
+XML<-1>="      <ShiptoAddress1>":SHIPTO.ADD1:"</ShiptoAddress1>"
+XML<-1>="      <ShiptoAddress2>":SHIPTO.ADD2:"</ShiptoAddress2>"
+XML<-1>="      <ShiptoCity>":SHIPTO.CITY:"</ShiptoCity>"
+XML<-1>="      <ShiptoStateOrProvince>":SHIPTO.STATE:"</ShiptoStateOrProvince>"
+XML<-1>="      <ShiptoZipOrPostalCode>":SHIPTO.ZIP:"</ShiptoZipOrPostalCode>"
+XML<-1>="      <ShiptoPhoneNumber>":SHIPTO.PH:"</ShiptoPhoneNumber>"
+XML<-1>="      <ShiptoCountry>":SHIPTO.COUNTRY:"</ShiptoCountry>"
+*~*
+XML<-1>="      <OrderDate>":O.DATE:"</OrderDate>"
+XML<-1>="      <RequestedDate>":R.DATE:"</RequestedDate>"
+XML<-1>="      <CarrierService>":S.VIA:"</CarrierService>"
+
+*~* jemi 09/16/20 - if tied to a PO then it's not an emergency!
+      EMERGENCY = "0"
+
+XML<-1>="      <Emergency>":EMERGENCY:"</Emergency>"
+
+XML<-1>="      <PackAndMarkSeparately>":X.PACK.SEP:"</PackAndMarkSeparately>"
+XML<-1>="      <CustomChar2>":W.BY:"</CustomChar2>"
+XML<-1>="      <PickVerificationLevel>":PICK.VERIFY:"</PickVerificationLevel>"
+*~*
+
+XML<-1>="      <CustomChar7>":X.CODE:"</CustomChar7>"
+***********************
+*XFER HEADER COMMENTS *  Updated 07/28/20 - to send the line comments as Order Comments
+***********************                 
+
+            IF ST.REC<24> = "" THEN GOTO 35
+
+XML<-1>="        <WmsShipmentCommentInSiEs>"
+SNO = 0  
+               FOR Z = 1 TO DCOUNT(ST.REC<24>,@VM)     
+               L.COMMENT = ST.REC<24,Z>
+               L.COMMENT = TRIM(L.COMMENT)
+               IF L.COMMENT = "" THEN GOTO EMPTY
+                  CONVERT '\' TO '-' IN L.COMMENT 
+                  CONVERT '/' TO '-' IN L.COMMENT
+                  CONVERT '<' TO '-' IN L.COMMENT 
+                  CONVERT '>' TO '-' IN L.COMMENT                  
+                  CONVERT '&' TO ' ' IN L.COMMENT                
+               
+*               IF L.COMMENT = "" THEN GOTO 34             
+ 
+XML<-1>="                          <Line>"
+SNO = SNO + 1
+XML<-1>="                             <Sequence>":SNO:"</Sequence>"               
+XML<-1>="                             <Comment>":L.COMMENT:"</Comment>"
+XML<-1>="                             <PrintSequence>":SNO:"</PrintSequence>"
+XML<-1>="                          </Line>"
+EMPTY:
+34              NEXT Z
+XML<-1>="           </WmsShipmentCommentInSiEs>"
+
+
+**************************
+*  XFER LINE DETAIL FEED *
+**************************
+35
+XML<-1>="            <WmsShipmentDetailInSiEs>"
+    
+            FOR X = 1 TO DCOUNT(ST.REC<4>,@VM)     
+
+       PART.NO = ST.REC<4,X>
+
+*~* Check and see it the Product exist in the PM *~*
+       READ PROD.REC FROM FILES(20),PART.NO ELSE PROD.REC = ""
+       WMS = PROD.REC<127>
+       IF WMS = "" THEN
+       CALL XML.WMS.PRODUCT.UPLOAD(PART.NO)
+       END
+*~* 
+                          Q.ORD = ST.REC<5,X>
+       Q.ORD = ST.REC<5,X>
+*       U.PRICE = NA
+       UOM = ST.REC<6,X>
+       IF ST.REC<6,X> = "C" THEN ST.REC<6,X> = "EA" ; UOM = "EA"
+       IF ST.REC<6,X> = "CFT" THEN ST.REC<6,X> = "CFT" ; UOM = "FT"
+          IF UOM = "" THEN UOM = "EA"
+          CONVERT '\' TO '-' IN ST.REC
+
+*~* COMMENTED OUT 653-656 01/22/21 - IN LIEU OF ADDRESSING ALL NEGATIVES DIRECTLY BELOW IT *~*
+*~* added to address Business Promo's on a PO *~*
+*      IF PART.NO = "BUSINESSPR" OR PART.NO = "DONATIONPR" OR PART.NO = "BILLING ADJ" OR PART.NO = "BUSINESSMI" THEN
+*         Q.ORD = Q.ORD * -1
+*      END
+
+     IF Q.ORD[1,1] = "-" OR Q.ORD = 0 THEN 
+        ST.REC<31,X> = Q.ORD
+        ST.REC<9,X> = "C"
+        ST.REC<51,X> = "Y"
+        ST.REC<73,X> = Q.ORD ;  * gets over-written with the Qty.Picked         
+        ST.REC<74,X> = MNO
+        ST.REC<75,X> = PART.NO       
+        WRITE ST.REC TO FILES(77),ORDER.NO
+        GOTO 41
+     END     
+ 
+*!* commented out below 01/25/21 - jemi     
+*     IF Q.ORD[1,1] = "-" THEN  
+*      Q.ORD = Q.ORD * -1
+*     END        
+
+*IF Q.ORD = 0 THEN GOTO 41
+XML<-1> = "             <Line>"
+LNO=LNO+1
+XML<-1> = "                <Item>":ST.REC<4,X>:"</Item>"                        
+XML<-1>="                  <OrderLine>":LNO:"</OrderLine>"
+XML<-1>="                  <HostOrderLine>":MNO:"</HostOrderLine>"
+XML<-1>="                  <QuantityOrdered>":Q.ORD:"</QuantityOrdered>"
+XML<-1>="                  <OrderUom>":UOM:"</OrderUom>"
+XML<-1>="                  <UnitPrice>":U.PRICE:"</UnitPrice>"
+XML<-1>="                  <OriginalQuantity>":Q.ORD:"</OriginalQuantity>"
+XML<-1>="                  <PlanQuantity>":Q.ORD:"</PlanQuantity>"
+XML<-1>="                  <FillShortages>":SHORTS:"</FillShortages>"
+XML<-1>="                  <RequestedReceiptDate>":R.DATE:"</RequestedReceiptDate>"
+XML<-1>="                  <OpenOrderQuantity>":Q.ORD:"</OpenOrderQuantity>"
+
+********************************
+* STOCK-XFER LINE COMMENT FEED *
+********************************
+*****************************************
+* Outbound Order Line Comments stg_xo_f **~*~* Commenting out since it's not always line specific - moved to XF Header Comment 07/28/20 -jemi
+*****************************************
+Sequence = LINE.NO                           ;  * AUTO-NUMBER
+Comment = O.COMMENT                          ;  * XF:Attribute 24
+PrintOnPickList = PRT.PICK                   ;  * Default = Y 
+PRT.PICK = "Y"
+PrintOnMasterPackingList = PRT.PACK          ;  * Default = Y
+PRT.PACK = "Y"
+PrintOnShippingLabel = PRT.LABEL             ;  * Default = Y
+PRT.LABEL = "Y"
+PrintOnManifest = PRT.MANIFEST               ;  * Default = Y
+PRT.MANIFEST = "Y"
+PrintSequence = LINE.NO                      ;  * AUTO-NUMBER
+
+
+         IF ST.REC<33,X> = "" THEN GOTO 40   
+C.PUT = "Y"
+S.ORD = ""
+*~* 05/18/20 - EACH SO# ASSOCIATED WITH A LINE MUST BE IT'S OWN COMMENT!!
+*~* 07/30/20 - this failed when multiple SO's  12345\67890 - updated line 655 below (from X to XX), but not sure yet if it works.
+
+*~* PO or SO?? Associated with the Stock-Transfer *~*
+
+*~* 09/16/20 - <35> IS MULTI-VALUE - CAN'T INCLUDE HERE!
+
+
+      FOR XX = 1 TO DCOUNT(ST.REC<4,X>,CHAR(252))
+         S.ORD = ST.REC<33,X,XX>
+         READ ORD.REC FROM FILES(13),S.ORD ELSE ORD.REC=''
+         L.COMMENT = "SO:":S.ORD
+         READ ORD.REC FROM FILES(14),S.ORD ELSE ORD.REC=''
+         L.COMMENT = "PO:":S.ORD
+
+         
+XML<-1>="                      <WmsShipmentDetailCommentInSiEs>"     
+
+*              L.COMMENT = ST.REC<33,XX>
+               IF L.COMMENT = "" THEN COMMENT = "- - - - -"
+ 
+XML<-1>="                          <Line>"
+XML<-1>="                             <Sequence>":XX:"</Sequence>"               
+XML<-1>="                             <Comment>":L.COMMENT:"</Comment>"
+XML<-1>="                            <PrintSequence>":XX:"</PrintSequence>"
+XML<-1>="                          </Line>"
+**               NEXT Z
+          NEXT XX
+XML<-1>="                      </WmsShipmentDetailCommentInSiEs>"   
+
+40
+XML<-1>="               </Line>"
+
+41      ST.REC<76,X> = MNO    
+        MNO=MNO+1
+        NEXT X
+XML<-1>="            </WmsShipmentDetailInSiEs>"   
+50
+* wrap it up
+****************
+XML<-1>="   </WmsShipmentInSiEs>"
+XML<-1>=" </transaction>"
+
+   TS.KEY = ORDER.NO
+   TS.KEY = TS.KEY:"*ST"
+   TS.MSG = ""  
+   TS.MSG<1>="SENT TO TECSYS"
+   TS.MSG<2>="TIED-2-PO: ":OUR.PO
+   CALL WMS.TIMESTAMP.UPDATE(TS.MSG, TS.KEY, "WMS", "SYS", ERROR)
+   
+GOTO RN
+END
+
+IF DCOUNT(XML,CHAR(254))=1 THEN GOTO 100
+
+XML<-1>="</transactions>"
+
+OTIME = TIME()
+ODATE = DATE()
+
+XML.KEY= FILENAME:'Batch-XF-2-PO-':ODATE:OTIME:'.xml'
+WRITE XML ON F.IN,XML.KEY
+
+100 
+*RETURN
+O.TIME = OCONV(OTIME,'MT/') 
+O.DATE = OCONV(ODATE,'D4/')
+          PRINT
+          PRINT "** XFERS TIED TO NEW PO'S   **" 
+          PRINT '******************************'
+          PRINT '**** ':O.DATE:' **  ':O.TIME:' ****'
+          PRINT '*** SLEEPING FOR 5 MINUTES ***'
+          PRINT '*******************************'
+          PRINT
+
+*SLEEP 900  ;  *  Moved the sleep into the primary phantom:  tecsys.wms.phantom
+*GOTO SELECT.FILES
+RETURN

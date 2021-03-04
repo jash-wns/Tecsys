@@ -1,0 +1,256 @@
+SUBROUTINE OE.SR.CM.LINE.REV ( OREC , ENTRY , VAL , ORDER.NO , PROMPT.REC , ACT )
+*************************************************************************
+* *                   WESTERN NEVADA SUPPLY COMPANY                   * *
+*0*Header Stamp Rev 1.1                                               * *
+* *      Subroutine: OE.SR.CM.LINE.REV                                * *
+* *                                                                   * *
+* * Conversion Date: 02/06/96  By: Erlach, Tim                        * *
+*1*  Last file date: 06/26/07  By: DADR - Driscoll, Dan               * *
+*2*    Compile date: 06/26/07  By: DADR - Driscoll, Dan               * *
+*3*  Last file time: 15:34:37  Port: 316   Account: MIS               * *
+*4*    Compile time: 15:34:36  Port: 316   Account: MIS               * *
+*5*   Object frames:        2  PICK rev: 7.4.0.M9.A11.D11.F4          * *
+*6*    Object bytes:    5,138  Flash frames: 0                        * *
+* * Program Purpose:                                                  * *
+* * UPDATED 12/23/20 TO ADDRESS NEW ATTRIBUTES ADDED FOR TECSYS       * *
+*************************************************************************
+    
+COMMON FILES(200)
+*===========================================
+* SUBROUTINE INITAL VALUES
+*===========================================
+*   READ TEMP.REC FROM FILES(175),ORDER.NO THEN
+*      ACT = "NO"
+*      RETURN
+*   END
+
+    PROMPT CHAR(0)
+    ACT = ""
+    USER.ID  = FILES(95)
+    RET.CODE = FIELD(PROMPT.REC<39>,',',1)
+    RET.CODE.NS = FIELD(PROMPT.REC<39>,',',3)
+    IF RET.CODE.NS = "" THEN RET.CODE.NS = RET.CODE
+    RSN.CODE = FIELD(PROMPT.REC<39>,',',2)
+    IF VAL+0 = 0 THEN GOTO 200 ; * REVERSE ALL LINES
+*===========================================
+* INITIAL VALUES FOR SINGLE LINE REVERSE
+*===========================================
+    INV.NO  = FIELD(ENTRY,"/",2)
+    O.NO = INV.NO ; GOSUB 800 ; * FIND ORIGINAL INVOICE#
+    LINE.NO = FIELD(ENTRY,"/",3)
+    IF LINE.NO = "" THEN
+       LINE.NO = INV.NO
+       INV.NO = ORDER.NO[3,99]
+    END
+*===========================================
+* CHECK INTEGRITY OF PARAMETERS
+*===========================================
+    IF LINE.NO MATCHES '0N' AND LINE.NO > 0 THEN NULL ELSE
+       ACT = "NO"
+       RETURN
+    END
+    READ INV.REC FROM FILES(11),INV.NO ELSE
+       ACT = "NO"
+       RETURN
+    END    
+    IF INV.REC<2,LINE.NO> = "" THEN
+       ACT = "NO"
+       RETURN
+    END
+
+*===========================================
+* START REVERSE SINGLE LINE OF THE INVOICE
+*===========================================
+    OREC<1> = FILES(197)<2>
+    FOR I = 2 TO 12 ; OREC<I,VAL> = INV.REC<I,LINE.NO> ; NEXT I
+    FOR I = 20 TO 21
+       IF OREC<3,VAL,I>[1,4] = "JOB:" THEN OREC<3,VAL,I> = ''
+    NEXT I
+    OREC<3,VAL,-1> = 'CREDIT FOR INVOICE#: ':INV.NO:' - LINE#: ':LINE.NO
+    OREC<4,VAL>    = INV.REC<34,LINE.NO>*'-1'
+    OREC<5,VAL>    = INV.REC<34,LINE.NO>*'-1'
+    OREC<13,VAL>   = DATE()
+    OREC<9,VAL> = ''
+    OREC<34,VAL> = '' ; OREC<35,VAL> = '' 
+    OREC<36> = '' ; OREC<37> = '' ; OREC<38> = ''
+    OREC<41> = ""
+    OREC<52,VAL>   = FILES(197)<2>
+    OREC<53,VAL>   = INV.REC<53,LINE.NO>
+    OREC<54,VAL>   = INV.REC<54,LINE.NO>
+    OREC<75,VAL>   = '*'
+    OREC<77,VAL>   = '*'
+    OREC<105,VAL>  = ""    
+    OREC<115,VAL>  = INV.REC<115,LINE.NO>
+    OREC<120>      = "" ;  * FREIGHT COST
+    OREC<134>      = "" ; * BETTY 01014 UPS#
+    OREC<150,VAL>  = INV.REC<150,LINE.NO> ; * COMPONENTS
+    OREC<151,VAL>  = INV.REC<151,LINE.NO> ; * COMPONENT KEYS
+    OREC<130,VAL>  = "0" ; * TO KEEP FROM CALCULATING LOW PRICE
+    OREC<131,VAL>  = O.NO ; * ORIGINAL INVOICE#
+
+*~* Clearing of the Tecsys Attributes 12/23/20  <--  SEE BELOW
+*    FOR JM = 162 to 175 ;  OREC<JM> = ""  ;  NEXT JM
+*~*  
+*    FOR XX = 225 to 269 ;  OREC<XX> = ""  ;  NEXT XX
+*~*
+
+    OREC<308> = "" ; * SOC INFO FROM THE ORIGINAL INVOICE
+    
+    RETURN
+*===========================================
+* REVERSE ALL INVOICE
+*===========================================
+200 INV.NO = ORDER.NO[3,99]
+    O.NO = ORDER.NO ; GOSUB 800 ; * FIND ORIGINAL INVOICE#
+    CM.BO = INDEX(INV.NO,"/",1) ; * IS IT A REMAINDER
+    IF CM.BO GT 0 THEN ; * IT'S A REMAINDER OF OTHER CREDIT MEMOS
+       TEMP.INV.REC = ""
+       CALL OE.SR.CM.QTY (TEMP.INV.REC,INV.NO)
+       O.NO = INV.NO
+    END
+    READ INV.REC FROM FILES(11),INV.NO THEN
+      GOTO 205;END ELSE
+    READ INV.REC FROM FILES(26),INV.NO ELSE
+       ACT = "NO"
+       RETURN
+205 END
+    IF CM.BO # "0" THEN
+       INV.REC<34> = TEMP.INV.REC<34> ; * QUANTITY REMAINING
+    END
+210 READ T.REC FROM FILES(4),INV.REC<16>
+     IF T.REC<146> = "N" THEN
+       PRINT@(0,23):@(-4):"CREDIT MEMO FOR THIS CUSTOMER NOT ALLOWED ":
+       ACT = 'NO'; INPUT ANS:
+       RETURN
+     END
+     IF INV.REC<18> = "D" THEN
+       CRT @(0,22):@(-4):"***** NOTE *****  YOU ARE REVERSING A DIRECT ORDER!!!!"
+       CRT @(0,23):@(-4):"*** CONVERTED TO A REGULAR ORDER.  WILL AFFECT INVENTORY!!":
+       INPUT PAUSE:
+     END
+     PRINT @(0,23):@(-4):'REVERSE (A)ll lines & header,(H)eader only,(E)nd ':CHAR(7):
+    INPUT SEL.CODE:
+
+    PRINT @(0,23):@(-4):
+    IF SEL.CODE = 'E' THEN
+       ACT = 'NO'
+       RETURN
+    END
+    IF SEL.CODE = 'H' THEN
+       OREC = ''
+       OREC<1> = FILES(197)<2>
+       FOR I = 14 TO 30 ; OREC<I> = INV.REC<I> ; NEXT I
+       IF OREC<18> = "D" THEN OREC<18> = "R"
+       READV DEPT FROM FILES(25),OREC<22>,17
+       OREC<133>=DEPT
+       OREC<134> = ""
+       FOR I = 39 TO 40 ; OREC<I> = INV.REC<I>*"-1" ; NEXT I
+       FOR G=102 TO 104; OREC<G>=INV.REC<G>; NEXT G
+*** add the tax code used in the Sales Order to the CM - jemi 04/15/19 ***
+       OREC<23> = INV.REC<23> ;  * TAX CODE       
+       OREC<42> = INV.REC<42> ;  * TAX PERCENT
+       OREC<49> = INV.REC<49>
+       OREC<50> = INV.REC<50>
+       OREC<96> = TIME()
+       OREC<20> = DATE()+1
+       OREC<19> = DATE()
+       RETURN
+    END
+    IF SEL.CODE = 'A' THEN NULL ELSE GOTO 210
+    OREC = INV.REC
+    OREC<134> = "" ; * UPS TRACKING
+    OREC<120>  = ""  ;  * FREIGHT COST    
+    IF OREC<18> = "D" THEN OREC<18> = "R"
+    OREC<1> = FILES(197)<2>
+*** WIPE GATHER AND PALM INFO ****
+    FOR X = 225 TO 269
+        OREC<X> = ''
+    NEXT X
+*** WIPE GATHER AND TECSYS INFO ****
+    FOR Y = 162 TO 175
+        OREC<Y> = ''
+    NEXT Y    
+    OREC<308> = "" ; * SOC INFO
+
+    OREC<130> = "" ; OREC<131> = ""
+    VMAX = DCOUNT(OREC<2>,CHAR(253))
+    J = 1
+    FOR I = 1 TO VMAX
+       IF OREC<3,I,20>[1,4] = 'JOB:' THEN OREC<3,I,20> = ''
+       IF OREC<3,I,21>[1,4] = 'JOB:' THEN OREC<3,I,21> = ''
+       OREC<4,J>  = "-1"*INV.REC<34,I>
+       OREC<5,J>  = "-1"*INV.REC<34,I>
+       OREC<13,J> = DATE()
+       OREC<34,J> = OREC<5,J>
+       OREC<35,J> = "C"
+       OREC<36,J> = "-1"*INV.REC<36,I>
+       OREC<37,J> = "-1"*INV.REC<37,I>
+       OREC<41>   = ""
+       OREC<52,J> = FILES(197)<2>
+       OREC<71,J> = RET.CODE   
+       OREC<120>  = ""  ;  * FREIGHT COST
+*** add the tax code used in the Sales Order to the CM - jemi 04/15/19 ***
+       OREC<23> = INV.REC<23> ;  * TAX CODE
+       OREC<42> = INV.REC<42> ;  * TAX %       
+** 4/15/19 - However - am find it changes the tax code (not amount or %) during the SA process!
+       INV.KEY = OREC<2,J>:"*":INV.REC<52,J> ; * PROD.NO:"*":BRANCH
+       READV STS FROM FILES(10),INV.KEY,60 ELSE STS = ""
+       IF STS = "N" THEN OREC<71,J> = RET.CODE.NS
+
+       OREC<72,J>  = RSN.CODE
+       OREC<130,J> = "0" ; * TO KEEP FROM CALCULATING LOW PRICE
+       OREC<131,J> = O.NO
+       OREC<75,J>  = "*"
+       OREC<77,J>  = "*"
+       J = J + 1
+    NEXT I
+    VMAX = DCOUNT(OREC<55>,CHAR(253))
+    FOR I = 1 TO VMAX
+       OREC<57,I> = "-1"*INV.REC<57,I>
+       OREC<59,I> = "-1"*INV.REC<59,I>
+    NEXT I
+    FOR I = 39 TO 40
+       OREC<I> = "-1"*INV.REC<I>
+    NEXT I
+    FOR I = 43 TO 45
+       OREC<I> = "-1"*INV.REC<I>
+    NEXT I
+    OREC<44> = '' ; * UPS CHARGES
+    OREC<96> = TIME()
+*===========================================
+* START CLEAR UN-WANTED FIELDS
+*===========================================
+    OREC<11> = ''
+    OREC<19> = DATE()
+    OREC<20> = DATE()
+    OREC<22> = USER.ID
+*~* 12/23/20 - JEMI - shouldn't it look at the original dept and credit back to it?
+    READV DEPT FROM FILES(25),OREC<22>,17
+    OREC<133> = DEPT
+    OREC<134> = "" ; * UPS TRACK
+    OREC<120> = "" ; * FREIGHT COST    
+    FOR I = 31 TO 33 ; OREC<I> = '' ; NEXT I
+    FOR I = 34 TO 38 ; OREC<I> = '' ; NEXT I ; * JKE PER GEORGE
+    OREC<46> = ''
+    OREC<48> = ''
+    OREC<87> = ''
+    FOR I = 89 TO 94 ; OREC<I> = '' ; NEXT I
+    FOR I = 98 TO 101; OREC<I> = '' ; NEXT I
+    FOR I = 162 TO 175; OREC<I> = '' ; NEXT I      ;  * Added clearing the Tecsys Attributes 12/23/20 -jemi
+    FOR I = 225 TO 269; OREC<I>= '' ; NEXT I
+    OREC<308> = "" ; * SOC INFO
+    OREC<105> = ""
+    OREC<120> = ""    
+    IF CM.BO GT 0 THEN CALL OE.SR.CM.CLEAR (OREC) ; * DELETE ZEROES
+    IF FILES(95) = "DADR" THEN
+     CALL OE.SR.PRICE.COST.EXT.OPEN.ORDER (OREC, PROMPT.REC)
+    END
+
+    RETURN
+***************************************************************
+800 FOR JJJ = 1 TO LEN(O.NO)
+        IF O.NO[1,2] = "CM" THEN O.NO = O.NO[3,LEN(O.NO)-2]
+    NEXT JJJ
+    RETURN
+
+END
